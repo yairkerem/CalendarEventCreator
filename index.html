@@ -77,7 +77,16 @@ input:focus,textarea:focus{
   outline:none; border-color:var(--accent);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 28%,transparent);
 }
-input[type=date],input[type=time]{direction:ltr;text-align:start}
+input[type=date]{direction:ltr;text-align:start}
+/* 24h time. A plain text field, not <input type=time>: that control renders in
+   the device's locale, and nothing in HTML or CSS can force 24h on a phone set
+   to 12h. Typing is also faster than a picker when the time is being copied
+   out of a message. */
+input.time{
+  direction:ltr; text-align:center; letter-spacing:.08em;
+  font-variant-numeric:tabular-nums;
+}
+input.time.bad{border-color:var(--danger);background:var(--danger-bg)}
 textarea{min-height:150px;resize:vertical;line-height:1.55}
 .field{margin-bottom:16px}
 .row{display:flex;gap:12px}
@@ -89,6 +98,16 @@ textarea{min-height:150px;resize:vertical;line-height:1.55}
 input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .hint{font-size:.8rem;margin:6px 0 0;color:var(--warn)}
 .datelabel{font-size:.85rem;color:var(--muted);margin:6px 0 0}
+
+/* ---- follow-up question -------------------------------------- */
+.qa{background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius);padding:14px;margin:0 0 16px}
+.qa-log{margin:0 0 12px}
+.qa-log p{margin:0 0 8px}
+.qa-log p:last-child{margin-bottom:0}
+.qa-log .ask{font-weight:600}
+.qa-log .said{font-size:.88rem;color:var(--muted);padding-inline-start:14px;
+  border-inline-start:2px solid var(--border)}
 
 /* ---- update mode --------------------------------------------- */
 .chg{display:inline-block;margin-inline-start:6px;padding:1px 8px;border-radius:999px;
@@ -230,6 +249,20 @@ button{font:inherit;cursor:pointer}
     <button type="button" id="b-unthumb" aria-label="הסרת התמונה">×</button>
   </div>
 
+  <!-- shown only when the model needs one more detail before it can build the
+       event; the original message stays in the textarea above for context -->
+  <div id="qa" class="qa" hidden>
+    <div id="qa-log" class="qa-log"></div>
+    <div class="field" style="margin-bottom:12px">
+      <input id="i-answer" type="text" dir="auto" autocomplete="off"
+             enterkeyhint="send" placeholder="התשובה שלך">
+    </div>
+    <button id="b-answer" class="btn">
+      <span id="answer-spin" class="spin" hidden></span>
+      <span id="answer-label">שליחת התשובה</span>
+    </button>
+  </div>
+
   <div id="input-msg" class="msg err" hidden></div>
 
   <div class="stack">
@@ -275,13 +308,18 @@ button{font:inherit;cursor:pointer}
   <div class="row">
     <div class="field">
       <label for="p-start">שעת התחלה <span class="chg" id="chg-start" hidden>שונה</span></label>
-      <input id="p-start" type="time">
+      <input id="p-start" class="time" type="text" inputmode="numeric" maxlength="5"
+             placeholder="--:--" autocomplete="off" enterkeyhint="next"
+             aria-describedby="time-hint">
     </div>
     <div class="field" id="end-field">
       <label for="p-end">שעת סיום <span class="chg" id="chg-end" hidden>שונה</span></label>
-      <input id="p-end" type="time">
+      <input id="p-end" class="time" type="text" inputmode="numeric" maxlength="5"
+             placeholder="--:--" autocomplete="off" enterkeyhint="done"
+             aria-describedby="time-hint">
     </div>
   </div>
+  <p id="time-hint" class="datelabel" style="margin:-8px 0 16px">שעון 24 שעות</p>
   <p id="need-end" class="hint" style="margin-top:-8px;margin-bottom:16px" hidden>
     שעת הסיום לא נמסרה בהודעה — יש להזין אותה כדי ליצור את האירוע.
   </p>
@@ -348,6 +386,10 @@ const FIELDS   = ['title','date','start','end','location'];
 const INPUT_OF = { title:'p-title', date:'p-date', start:'p-start', end:'p-end', location:'p-loc' };
 const CHG_OF   = { title:'chg-title', date:'chg-date', start:'chg-start', end:'chg-end', location:'chg-location' };
 
+/* How many clarifying questions before we stop and ask for a rewrite. Four is
+   generous; past that the message is the problem, not the missing detail. */
+const MAX_QA = 4;
+
 const state = {
   secret:'', user:'',
   image:null,      // {mediaType, data, preview}
@@ -356,6 +398,7 @@ const state = {
   mode:'create',   // 'create' | 'update'
   match:null,      // the existing event the backend thinks is being edited
   alts:[],         // other candidates the backend offered
+  history:[],      // [{role,content}] of the current clarification exchange
   setupReturn:null // screen to go back to when setup was opened from the gear
 };
 
@@ -454,7 +497,7 @@ async function connect(){
     localStorage.setItem(LS_USER, user);
     state.secret = secret;
     state.user   = user;
-    setWho(r.calendar);
+    setWho(r.calendar, r.version);
     say('setup-msg', 'מחובר ליומן: ' + (r.calendar || '—'), 'ok');
     setTimeout(() => { if ($('s-setup').classList.contains('active')) show('input'); }, 1400);
   } catch (e){
@@ -464,10 +507,13 @@ async function connect(){
   }
 }
 
-function setWho(board){
+/* The backend version is here purely so a stale Apps Script deployment is
+   visible at a glance — that failure mode is silent and wastes real time. */
+function setWho(board, version){
   const parts = [];
   if (state.user) parts.push('נוצר כ־' + state.user);
   if (board) parts.push('יומן: ' + board);
+  if (version) parts.push('v' + version);
   $('who').textContent = parts.join(' · ');
 }
 
@@ -522,6 +568,52 @@ function detach(){
 }
 
 /* ---- parse ---------------------------------------------------- */
+/* One exchange with the backend. The model either returns an event, or asks a
+   single question — which is why the original message and every answer since
+   travel together as `history`. */
+async function turn(text, withImage, ui){
+  const useImage = withImage && !!state.image;
+  busy(ui.btn, ui.spin, ui.label, true, useImage ? 'קורא את התמונה…' : ui.busy);
+
+  const payload = { secret: state.secret, action: 'parse' };
+  if (text) payload.text = text;
+  if (useImage) payload.image = { mediaType: state.image.mediaType, data: state.image.data };
+  if (state.history.length) payload.history = state.history.slice();
+
+  try {
+    const r = await api(payload, useImage ? T_IMAGE : T_TEXT);
+    if (!r.ok){ failedWith(r.error, 'input-msg'); return; }
+
+    if (r.status === 'question' && r.question){
+      state.history.push({ role:'user',      content: text });
+      state.history.push({ role:'assistant', content: r.question });
+
+      /* history holds two entries per round, so this counts questions asked */
+      if (state.history.length / 2 > MAX_QA){
+        clearQA();
+        say('input-msg', 'לא הצלחתי להבין את ההודעה. נסו לנסח אותה מחדש עם יותר פרטים.', 'err');
+        return;
+      }
+      renderQA();
+      return;
+    }
+
+    clearQA();
+    fillProposal(r);
+    show('prop');
+  } catch (e){
+    say('input-msg', netMessage(e), 'err');
+  } finally {
+    busy(ui.btn, ui.spin, ui.label, false, ui.idle);
+  }
+}
+
+const UI_PARSE  = { btn:'b-parse',  spin:'parse-spin',  label:'parse-label',
+                    busy:'מנתח…',  idle:'ניתוח ההודעה' };
+const UI_ANSWER = { btn:'b-answer', spin:'answer-spin', label:'answer-label',
+                    busy:'שולח…',  idle:'שליחת התשובה' };
+
+/* A fresh message always starts a fresh exchange. */
 async function parse(){
   const text = $('i-text').value.trim();
   if (!text && !state.image){
@@ -529,25 +621,44 @@ async function parse(){
     return;
   }
   say('input-msg', '', 'err');
+  state.history = [];
+  await turn(text, true, UI_PARSE);
+}
 
-  const withImage = !!state.image;
-  busy('b-parse', 'parse-spin', 'parse-label', true,
-       withImage ? 'קורא את התמונה…' : 'מנתח…');
-
-  const payload = { secret: state.secret, action: 'parse' };
-  if (text) payload.text = text;
-  if (withImage) payload.image = { mediaType: state.image.mediaType, data: state.image.data };
-
-  try {
-    const r = await api(payload, withImage ? T_IMAGE : T_TEXT);
-    if (!r.ok){ failedWith(r.error, 'input-msg'); return; }
-    fillProposal(r);
-    show('prop');
-  } catch (e){
-    say('input-msg', netMessage(e), 'err');
-  } finally {
-    busy('b-parse', 'parse-spin', 'parse-label', false, 'ניתוח ההודעה');
+async function answer(){
+  const text = $('i-answer').value.trim();
+  if (!text){
+    say('input-msg', 'יש להזין תשובה.', 'err');
+    return;
   }
+  say('input-msg', '', 'err');
+  await turn(text, false, UI_ANSWER);
+}
+
+/* The first history entry is the original message — it is still sitting in the
+   textarea, so the log starts from the first question. */
+function renderQA(){
+  const log = $('qa-log');
+  log.textContent = '';
+  state.history.forEach((t, i) => {
+    if (i === 0) return;
+    const p = document.createElement('p');
+    p.className = t.role === 'assistant' ? 'ask' : 'said';
+    p.textContent = t.content;
+    log.append(p);
+  });
+  $('i-answer').value = '';
+  $('qa').hidden = false;
+  $('b-parse').hidden = true;
+  $('i-answer').focus();
+}
+
+function clearQA(){
+  state.history = [];
+  $('qa-log').textContent = '';
+  $('i-answer').value = '';
+  $('qa').hidden = true;
+  $('b-parse').hidden = false;
 }
 
 /* ---- dates ---------------------------------------------------- */
@@ -565,6 +676,39 @@ function whenText(ev){
 
 function stampDate(){
   $('p-datelabel').textContent = heDate($('p-date').value);
+}
+
+/* ---- 24h time fields ------------------------------------------ */
+function validTime(v){ return /^([01]\d|2[0-3]):[0-5]\d$/.test(v || ''); }
+
+/* A leading 3–9 can only be a one-digit hour (9:30), while 0–2 might still be
+   heading for two (16:30). That one rule decides where the colon goes, both
+   while typing and when completing the shorthand on blur. */
+function hourLen(d){ return d[0] >= '3' ? 1 : 2; }
+
+/* Digits only; the colon appears on its own once the hour is complete. */
+function timeInput(el){
+  const d = el.value.replace(/\D/g, '').slice(0, 4);
+  const n = hourLen(d);
+  el.value = d.length > n ? d.slice(0, n) + ':' + d.slice(n, n + 2) : d;
+}
+
+/* On leaving the field, finish the shorthand: 9 -> 09:00, 930 -> 09:30,
+   161 -> 16:10, 1630 -> 16:30. Anything that still isn't a real time is marked,
+   not erased — silently discarding what someone typed is worse than showing it
+   as wrong. */
+function timeBlur(el){
+  const d = el.value.replace(/\D/g, '');
+  if (!d){ el.value = ''; el.classList.remove('bad'); return; }
+
+  const n = hourLen(d);
+  const h = d.slice(0, n);
+  let   m = d.slice(n, n + 2);
+  if (m.length === 0) m = '00';
+  if (m.length === 1) m = m + '0';   // "16:1" reads as 16:10, not 16:01
+
+  el.value = ('0' + h).slice(-2) + ':' + m;
+  el.classList.toggle('bad', !validTime(el.value));
 }
 
 /* ---- proposal ------------------------------------------------- */
@@ -603,6 +747,8 @@ function applyMode(){
   $('p-start').value = src.start    || '';
   $('p-end').value   = src.end      || '';   // never pre-fill a guess
   $('p-loc').value   = src.location || '';
+  $('p-start').classList.remove('bad');      // values from the backend are already HH:mm
+  $('p-end').classList.remove('bad');
 
   $('p-heading').textContent = upd ? 'עדכון אירוע קיים' : 'אישור אירוע';
   $('p-lede').textContent = upd
@@ -672,7 +818,7 @@ function markChanges(){
 /* The backend rejects a null end, so the button stays locked until there is one. */
 function validate(){
   const filled = $('p-title').value.trim() && $('p-date').value
-              && $('p-start').value && $('p-end').value;
+              && validTime($('p-start').value) && validTime($('p-end').value);
   $('b-create').disabled = !filled;
 
   const flagEnd = !!state.event.needsEnd && !$('p-end').value;
@@ -719,6 +865,7 @@ async function submit(){
 function reset(){
   $('i-text').value = '';
   detach();
+  clearQA();
   state.event = {};
   state.mode  = 'create';
   state.match = null;
@@ -735,6 +882,8 @@ $('i-user').addEventListener('keydown', e => { if (e.key === 'Enter') connect();
 
 $('b-settings').addEventListener('click', () => openSetup(''));
 $('b-parse').addEventListener('click', parse);
+$('b-answer').addEventListener('click', answer);
+$('i-answer').addEventListener('keydown', e => { if (e.key === 'Enter') answer(); });
 
 $('b-pick').addEventListener('click', () => $('f-pick').click());
 $('b-cam').addEventListener('click',  () => $('f-cam').click());
@@ -768,6 +917,15 @@ $('b-tocreate').addEventListener('click', () => {
 for (const id of ['p-title','p-date','p-start','p-end','p-loc']){
   $(id).addEventListener('input', () => {
     if (id === 'p-date') stampDate();
+    if (id === 'p-start' || id === 'p-end') timeInput($(id));
+    markChanges();
+    validate();
+  });
+}
+
+for (const id of ['p-start','p-end']){
+  $(id).addEventListener('blur', () => {
+    timeBlur($(id));
     markChanges();
     validate();
   });
@@ -784,7 +942,7 @@ if (state.secret && state.user){
   /* quiet ping just to put the board name in the header; failures stay silent
      so a flaky network never blocks the input screen */
   api({ secret: state.secret, action:'ping' }, T_PING)
-    .then(r => { if (r && r.ok) setWho(r.calendar); })
+    .then(r => { if (r && r.ok) setWho(r.calendar, r.version); })
     .catch(() => {});
 } else {
   openSetup('');

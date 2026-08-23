@@ -77,16 +77,15 @@ input:focus,textarea:focus{
   outline:none; border-color:var(--accent);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 28%,transparent);
 }
-input[type=date]{direction:ltr;text-align:start}
-/* 24h time. A plain text field, not <input type=time>: that control renders in
-   the device's locale, and nothing in HTML or CSS can force 24h on a phone set
-   to 12h. Typing is also faster than a picker when the time is being copied
-   out of a message. */
-input.time{
+/* Plain text fields, not <input type=time|date>: those controls render in the
+   device's locale, and nothing in HTML or CSS can force 24h or DD/MM/YYYY on a
+   phone set otherwise. Typing is also faster than a picker when the value is
+   being copied out of a message. */
+input.time,input.date{
   direction:ltr; text-align:center; letter-spacing:.08em;
   font-variant-numeric:tabular-nums;
 }
-input.time.bad{border-color:var(--danger);background:var(--danger-bg)}
+input.time.bad,input.date.bad{border-color:var(--danger);background:var(--danger-bg)}
 textarea{min-height:150px;resize:vertical;line-height:1.55}
 .field{margin-bottom:16px}
 .row{display:flex;gap:12px}
@@ -151,6 +150,7 @@ button{font:inherit;cursor:pointer}
   border:1px solid var(--border);border-radius:var(--radius);font-size:.92rem;
 }
 .chip:active{background:var(--surface-2)}
+.chip.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .thumb{position:relative;margin-top:12px;display:inline-block}
 .thumb img{
   display:block;max-height:132px;max-width:100%;
@@ -293,6 +293,12 @@ button{font:inherit;cursor:pointer}
 
   <div id="p-note" class="msg note" hidden></div>
 
+  <!-- names arrive from the backend on `ping`, never from this file -->
+  <div class="field" id="people-field" hidden>
+    <label>למי האירוע</label>
+    <div class="attach" id="people" style="margin-top:0"></div>
+  </div>
+
   <div class="field">
     <label for="p-title">כותרת <span class="chg" id="chg-title" hidden>שונה</span></label>
     <input id="p-title" type="text" dir="auto">
@@ -301,7 +307,8 @@ button{font:inherit;cursor:pointer}
 
   <div class="field">
     <label for="p-date">תאריך <span class="chg" id="chg-date" hidden>שונה</span></label>
-    <input id="p-date" type="date">
+    <input id="p-date" class="date" type="text" inputmode="numeric" maxlength="10"
+           placeholder="DD/MM/YYYY" autocomplete="off" enterkeyhint="next">
     <p id="p-datelabel" class="datelabel"></p>
   </div>
 
@@ -370,6 +377,9 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
+/* Cached so the name buttons are there on launch instead of waiting for the
+   ping. Device-local only — the list itself lives in the backend. */
+const LS_PEOPLE = 'fc.people';
 
 const MAX_EDGE  = 1568;   // longest edge before re-encoding
 const JPEG_Q    = 0.8;
@@ -398,6 +408,7 @@ const state = {
   mode:'create',   // 'create' | 'update'
   match:null,      // the existing event the backend thinks is being edited
   alts:[],         // other candidates the backend offered
+  people:[],       // family names, supplied by the backend on ping
   history:[],      // [{role,content}] of the current clarification exchange
   setupReturn:null // screen to go back to when setup was opened from the gear
 };
@@ -498,6 +509,7 @@ async function connect(){
     state.secret = secret;
     state.user   = user;
     setWho(r.calendar, r.version);
+    setPeople(r.people);
     say('setup-msg', 'מחובר ליומן: ' + (r.calendar || '—'), 'ok');
     setTimeout(() => { if ($('s-setup').classList.contains('active')) show('input'); }, 1400);
   } catch (e){
@@ -674,8 +686,52 @@ function whenText(ev){
   return [heDate(ev.date), time].filter(Boolean).join(' · ');
 }
 
+/* ---- DD/MM/YYYY date field ------------------------------------ */
+/* The field shows DD/MM/YYYY; everything else in the app — and the backend —
+   speaks ISO. These two functions are the only crossing point. */
+function dateShow(iso){
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const p = iso.split('-');
+  return p[2] + '/' + p[1] + '/' + p[0];
+}
+
+function dateISO(){
+  const d = $('p-date').value.replace(/\D/g, '');
+  if (d.length !== 8) return '';
+  const iso = d.slice(4, 8) + '-' + d.slice(2, 4) + '-' + d.slice(0, 2);
+  return realDate(iso) ? iso : '';
+}
+
+/* Rejects 31/02 and friends: round-tripping through Date only survives a day
+   that actually exists, which also settles leap years. */
+function realDate(iso){
+  const p = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  return dt.getUTCFullYear() === p[0] && dt.getUTCMonth() === p[1] - 1 && dt.getUTCDate() === p[2];
+}
+
+function dateInput(el){
+  const d = el.value.replace(/\D/g, '').slice(0, 8);
+  let v = d.slice(0, 2);
+  if (d.length > 2) v += '/' + d.slice(2, 4);
+  if (d.length > 4) v += '/' + d.slice(4, 8);
+  el.value = v;
+}
+
+function dateBlur(el){
+  el.classList.toggle('bad', !!el.value && !dateISO());
+}
+
+/* Canonical value of a proposal field, whatever the field happens to display.
+   markChanges and submit both compare against backend values, so both need the
+   ISO date rather than the DD/MM/YYYY on screen. */
+function fieldValue(f){
+  if (f === 'date') return dateISO();
+  return $(INPUT_OF[f]).value.trim();
+}
+
 function stampDate(){
-  $('p-datelabel').textContent = heDate($('p-date').value);
+  $('p-datelabel').textContent = heDate(dateISO());
 }
 
 /* ---- 24h time fields ------------------------------------------ */
@@ -743,12 +799,13 @@ function applyMode(){
   const src = upd ? mergeOnto(state.match, state.event) : state.event;
 
   $('p-title').value = src.title    || '';
-  $('p-date').value  = src.date     || '';
+  $('p-date').value  = dateShow(src.date);
   $('p-start').value = src.start    || '';
   $('p-end').value   = src.end      || '';   // never pre-fill a guess
   $('p-loc').value   = src.location || '';
   $('p-start').classList.remove('bad');      // values from the backend are already HH:mm
   $('p-end').classList.remove('bad');
+  $('p-date').classList.remove('bad');
 
   $('p-heading').textContent = upd ? 'עדכון אירוע קיים' : 'אישור אירוע';
   $('p-lede').textContent = upd
@@ -760,6 +817,7 @@ function applyMode(){
 
   renderMatch(upd);
   renderAlts();
+  renderPeople();
   $('b-tocreate').hidden = !upd;
   $('b-alts').hidden     = !(upd && state.alts.length);
   $('p-altlist').hidden  = true;
@@ -780,6 +838,54 @@ function renderMatch(upd){
   say('p-recurring', m.recurring
     ? 'זהו אירוע חוזר. העדכון יחול על המופע הזה בלבד — לא על כל הסדרה.'
     : '', 'note');
+}
+
+/* ---- who the event is for ------------------------------------- */
+/* The names follow the "[שם] - [אירוע]" convention the templates already use,
+   so choosing one is really just editing the title prefix. */
+const SEP = ' - ';
+
+function personOf(title){
+  for (const p of state.people) if (title.startsWith(p + SEP)) return p;
+  return null;
+}
+
+function stripPerson(title){
+  const p = personOf(title);
+  return p ? title.slice(p.length + SEP.length) : title;
+}
+
+function setPerson(name){
+  const base = stripPerson($('p-title').value.trim());
+  $('p-title').value = name ? name + SEP + base : base;
+  renderPeople();
+  markChanges();
+  validate();
+}
+
+function renderPeople(){
+  const box = $('people');
+  box.textContent = '';
+  if (!state.people.length){ $('people-field').hidden = true; return; }
+  $('people-field').hidden = false;
+
+  const current = personOf($('p-title').value.trim());
+  /* null is the "ללא" chip — it strips whatever name is on the title */
+  for (const name of state.people.concat([null])){
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip' + (current === name ? ' on' : '');
+    b.textContent = name === null ? 'ללא' : name;
+    b.addEventListener('click', () => setPerson(name));
+    box.append(b);
+  }
+}
+
+function setPeople(list){
+  if (!Array.isArray(list)) return;
+  state.people = list.filter(n => typeof n === 'string' && n.trim()).map(n => n.trim());
+  try { localStorage.setItem(LS_PEOPLE, JSON.stringify(state.people)); } catch {}
+  renderPeople();
 }
 
 function renderAlts(){
@@ -811,13 +917,13 @@ function markChanges(){
   for (const f of FIELDS){
     const badge = $(CHG_OF[f]);
     if (!upd){ badge.hidden = true; continue; }
-    badge.hidden = $(INPUT_OF[f]).value.trim() === String(state.match[f] || '').trim();
+    badge.hidden = fieldValue(f) === String(state.match[f] || '').trim();
   }
 }
 
 /* The backend rejects a null end, so the button stays locked until there is one. */
 function validate(){
-  const filled = $('p-title').value.trim() && $('p-date').value
+  const filled = $('p-title').value.trim() && dateISO()
               && validTime($('p-start').value) && validTime($('p-end').value);
   $('b-create').disabled = !filled;
 
@@ -832,11 +938,11 @@ function validate(){
 async function submit(){
   const upd = state.mode === 'update' && !!state.match;
   const ev = {
-    title:    $('p-title').value.trim(),
-    date:     $('p-date').value,
-    start:    $('p-start').value,
-    end:      $('p-end').value,
-    location: $('p-loc').value.trim(),
+    title:    fieldValue('title'),
+    date:     fieldValue('date'),
+    start:    fieldValue('start'),
+    end:      fieldValue('end'),
+    location: fieldValue('location'),
     needsEnd:   false,
     needsTitle: false,
     note: (state.event && state.event.note) || ''
@@ -916,16 +1022,17 @@ $('b-tocreate').addEventListener('click', () => {
 
 for (const id of ['p-title','p-date','p-start','p-end','p-loc']){
   $(id).addEventListener('input', () => {
-    if (id === 'p-date') stampDate();
+    if (id === 'p-date'){ dateInput($(id)); stampDate(); }
     if (id === 'p-start' || id === 'p-end') timeInput($(id));
+    if (id === 'p-title') renderPeople();   // typing a name lights its chip
     markChanges();
     validate();
   });
 }
 
-for (const id of ['p-start','p-end']){
+for (const id of ['p-start','p-end','p-date']){
   $(id).addEventListener('blur', () => {
-    timeBlur($(id));
+    if (id === 'p-date') dateBlur($(id)); else timeBlur($(id));
     markChanges();
     validate();
   });
@@ -934,6 +1041,8 @@ for (const id of ['p-start','p-end']){
 /* ---- boot ----------------------------------------------------- */
 state.secret = localStorage.getItem(LS_SECRET) || '';
 state.user   = localStorage.getItem(LS_USER)   || '';
+try { state.people = JSON.parse(localStorage.getItem(LS_PEOPLE) || '[]'); } catch { state.people = []; }
+if (!Array.isArray(state.people)) state.people = [];
 
 if (state.secret && state.user){
   setWho('');
@@ -942,7 +1051,7 @@ if (state.secret && state.user){
   /* quiet ping just to put the board name in the header; failures stay silent
      so a flaky network never blocks the input screen */
   api({ secret: state.secret, action:'ping' }, T_PING)
-    .then(r => { if (r && r.ok) setWho(r.calendar, r.version); })
+    .then(r => { if (r && r.ok){ setWho(r.calendar, r.version); setPeople(r.people); } })
     .catch(() => {});
 } else {
   openSetup('');

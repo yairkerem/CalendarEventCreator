@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Event Creator</title>
+<link rel="manifest" href="./manifest.webmanifest">
+
+<!-- theme-color per scheme; iOS reads only the first one it understands -->
+<meta name="theme-color" content="#2563eb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
+
+<!-- iOS ignores much of the manifest, so these are not optional -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Event Creator">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<link rel="icon" href="./icon-192.png" type="image/png">
+
+<style>
+:root{
+  --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f6;
+  --text:#111826; --muted:#5c6675; --border:#dbe1ea;
+  --accent:#2563eb; --accent-press:#1d4ed8; --on-accent:#ffffff;
+  --danger:#b42318; --danger-bg:#fef3f2; --danger-bd:#fda29b;
+  --ok:#087443; --ok-bg:#ecfdf3; --ok-bd:#a6f4c5;
+  --warn:#b54708; --warn-bg:#fffaeb; --warn-bd:#f5c26b;
+  --radius:14px;
+  --shadow:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0e1116; --surface:#161a21; --surface-2:#1e242d;
+    --text:#e6eaf1; --muted:#9aa4b2; --border:#2a313b;
+    --accent:#4d8dff; --accent-press:#3b7ae8; --on-accent:#0b1220;
+    --danger:#ff9c92; --danger-bg:#2a1512; --danger-bd:#5c2620;
+    --ok:#6ee7a8; --ok-bg:#0f2419; --ok-bd:#1f5138;
+    --warn:#f5c26b; --warn-bg:#2a1f0d; --warn-bd:#6b4e17;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans Hebrew","Arial Hebrew",Arial,sans-serif;
+  font-size:17px; line-height:1.5;
+  -webkit-text-size-adjust:100%;
+  padding:max(14px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right))
+          max(20px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));
+}
+main{max-width:560px;margin:0 auto}
+h1{font-size:1.45rem;margin:.2em 0 .3em}
+h2{font-size:1.25rem;margin:.2em 0 .6em}
+p.lede{color:var(--muted);margin:0 0 1.1em}
+
+.screen{display:none}
+.screen.active{display:block}
+
+/* ---- top bar ------------------------------------------------- */
+.bar{display:flex;align-items:center;gap:10px;margin-bottom:14px;min-height:32px}
+.bar .who{font-size:.85rem;color:var(--muted);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar .who b{color:var(--text);font-weight:600}
+.linkbtn{background:none;border:0;color:var(--accent);font:inherit;font-size:.85rem;
+  padding:8px;margin:-8px;cursor:pointer;border-radius:8px}
+
+/* ---- fields -------------------------------------------------- */
+label{display:block;font-size:.85rem;font-weight:600;color:var(--muted);margin:0 0 6px}
+input,textarea{
+  width:100%; font:inherit; color:var(--text);
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius); padding:13px 14px; min-height:52px;
+}
+input:focus,textarea:focus{
+  outline:none; border-color:var(--accent);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 28%,transparent);
+}
+input[type=date],input[type=time]{direction:ltr;text-align:start}
+textarea{min-height:150px;resize:vertical;line-height:1.55}
+.field{margin-bottom:16px}
+.row{display:flex;gap:12px}
+.row .field{flex:1;min-width:0}
+
+/* the end-time field when the backend flagged it — the one rule that matters most */
+.field.needs input{border-color:var(--warn);background:var(--warn-bg)}
+.field.needs label{color:var(--warn)}
+input.suggest{border-color:var(--warn);background:var(--warn-bg)}
+.hint{font-size:.8rem;margin:6px 0 0;color:var(--warn)}
+.datelabel{font-size:.85rem;color:var(--muted);margin:6px 0 0}
+
+/* ---- update mode --------------------------------------------- */
+.chg{display:inline-block;margin-inline-start:6px;padding:1px 8px;border-radius:999px;
+  font-size:.72rem;font-weight:600;
+  background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-bd)}
+.current{background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius);padding:12px 14px;margin:0 0 16px}
+.current h3{margin:0 0 8px;font-size:.8rem;font-weight:600;color:var(--muted)}
+.current dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:.92rem}
+.current dt{color:var(--muted)}
+.current dd{margin:0;overflow-wrap:anywhere}
+.altlist{display:flex;flex-direction:column;gap:8px;margin:0 0 16px}
+.alt{width:100%;text-align:start;background:var(--surface);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--radius);
+  padding:12px 14px;min-height:54px}
+.alt:active{background:var(--surface-2)}
+.alt b{display:block;font-weight:600;font-size:.95rem}
+.alt span{display:block;color:var(--muted);font-size:.85rem}
+
+/* ---- buttons ------------------------------------------------- */
+button{font:inherit;cursor:pointer}
+.btn{
+  display:flex;align-items:center;justify-content:center;gap:9px;
+  width:100%; min-height:54px; padding:14px 18px;
+  border:1px solid transparent; border-radius:var(--radius);
+  font-weight:600; background:var(--accent); color:var(--on-accent);
+  box-shadow:var(--shadow);
+}
+.btn:active{background:var(--accent-press)}
+.btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+.btn.secondary{background:var(--surface);color:var(--text);border-color:var(--border);box-shadow:none}
+.btn.secondary:active{background:var(--surface-2)}
+.stack{display:flex;flex-direction:column;gap:10px;margin-top:18px}
+
+/* ---- attachments --------------------------------------------- */
+.attach{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+.chip{
+  display:inline-flex;align-items:center;gap:7px;
+  min-height:46px;padding:10px 15px;
+  background:var(--surface);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--radius);font-size:.92rem;
+}
+.chip:active{background:var(--surface-2)}
+.thumb{position:relative;margin-top:12px;display:inline-block}
+.thumb img{
+  display:block;max-height:132px;max-width:100%;
+  border-radius:12px;border:1px solid var(--border);
+}
+.thumb button{
+  position:absolute;inset-block-start:-10px;inset-inline-end:-10px;
+  width:34px;height:34px;border-radius:50%;
+  background:var(--text);color:var(--bg);border:2px solid var(--bg);
+  font-size:19px;line-height:1;display:grid;place-items:center;
+}
+
+/* ---- messages ------------------------------------------------ */
+.msg{padding:12px 14px;border-radius:var(--radius);border:1px solid;
+  margin:14px 0 0;font-size:.92rem}
+.msg.err{background:var(--danger-bg);border-color:var(--danger-bd);color:var(--danger)}
+.msg.ok{background:var(--ok-bg);border-color:var(--ok-bd);color:var(--ok)}
+.msg.note{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn)}
+[hidden]{display:none !important}
+
+.spin{
+  width:19px;height:19px;border-radius:50%;
+  border:2.5px solid color-mix(in srgb,var(--on-accent) 35%,transparent);
+  border-top-color:var(--on-accent);
+  animation:spin .7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:2s}}
+
+/* ---- result -------------------------------------------------- */
+.done{text-align:center;padding:34px 0 10px}
+.done .tick{
+  width:70px;height:70px;margin:0 auto 18px;border-radius:50%;
+  background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-bd);
+  display:grid;place-items:center;font-size:36px;line-height:1;
+}
+.done .what{font-size:1.2rem;font-weight:600;margin:0 0 6px}
+.done .when{color:var(--muted);margin:0;direction:ltr}
+</style>
+</head>
+<body>
+<main>
+
+<!-- =========================== SETUP =========================== -->
+<section id="s-setup" class="screen">
+  <h1>הגדרה</h1>
+  <p class="lede">הזינו את הסיסמה המשותפת ואת השם שלכם. השם נשמר על המכשיר ומופיע כיוצר האירוע.</p>
+
+  <div class="field">
+    <label for="i-secret">סיסמה משותפת</label>
+    <input id="i-secret" type="password" autocomplete="off" autocapitalize="off"
+           autocorrect="off" spellcheck="false" enterkeyhint="next">
+  </div>
+  <div class="field">
+    <label for="i-user">שם תצוגה</label>
+    <input id="i-user" type="text" autocomplete="name" enterkeyhint="done" placeholder="השם שלך">
+  </div>
+
+  <div id="setup-msg" class="msg" hidden></div>
+
+  <div class="stack">
+    <button id="b-connect" class="btn">
+      <span id="connect-spin" class="spin" hidden></span>
+      <span id="connect-label">התחברות ובדיקה</span>
+    </button>
+    <button id="b-setup-cancel" class="btn secondary" hidden>ביטול</button>
+  </div>
+</section>
+
+<!-- =========================== INPUT =========================== -->
+<section id="s-input" class="screen">
+  <div class="bar">
+    <span class="who" id="who"></span>
+    <button id="b-settings" class="linkbtn">הגדרות</button>
+  </div>
+
+  <h1>אירוע חדש</h1>
+  <p class="lede">הדביקו הודעה, או צרפו צילום מסך.</p>
+
+  <div class="field" style="margin-bottom:0">
+    <textarea id="i-text" autofocus dir="auto"
+      placeholder="למשל: מחר אימון כדורגל 16:00–17:30"></textarea>
+  </div>
+
+  <div class="attach">
+    <button type="button" id="b-pick" class="chip">📎 צירוף תמונה</button>
+    <button type="button" id="b-cam" class="chip">📷 צילום</button>
+  </div>
+  <!-- no `capture` on the first input: the OS picker then offers camera *and*
+       gallery. The second input is the explicit one-tap camera path. -->
+  <input id="f-pick" type="file" accept="image/*" hidden>
+  <input id="f-cam"  type="file" accept="image/*" capture="environment" hidden>
+
+  <div id="thumb" class="thumb" hidden>
+    <img id="thumb-img" alt="התמונה המצורפת">
+    <button type="button" id="b-unthumb" aria-label="הסרת התמונה">×</button>
+  </div>
+
+  <div id="input-msg" class="msg err" hidden></div>
+
+  <div class="stack">
+    <button id="b-parse" class="btn">
+      <span id="parse-spin" class="spin" hidden></span>
+      <span id="parse-label">ניתוח ההודעה</span>
+    </button>
+  </div>
+</section>
+
+<!-- ========================= PROPOSAL ========================== -->
+<section id="s-prop" class="screen">
+  <h1 id="p-heading">אישור אירוע</h1>
+  <p class="lede" id="p-lede">בדקו את הפרטים לפני היצירה. שום דבר לא נוצר עד לאישור.</p>
+
+  <div id="p-recurring" class="msg note" hidden></div>
+
+  <div id="p-current" class="current" hidden>
+    <h3>האירוע הקיים ביומן</h3>
+    <dl>
+      <dt>כותרת</dt><dd id="c-title"></dd>
+      <dt>מתי</dt><dd id="c-when"></dd>
+      <dt>מיקום</dt><dd id="c-loc"></dd>
+    </dl>
+  </div>
+
+  <div id="p-altlist" class="altlist" hidden></div>
+
+  <div id="p-note" class="msg note" hidden></div>
+
+  <div class="field">
+    <label for="p-title">כותרת <span class="chg" id="chg-title" hidden>שונה</span></label>
+    <input id="p-title" type="text" dir="auto">
+    <p id="need-title" class="hint" hidden>הכותרת היא הצעה — כדאי לעבור עליה.</p>
+  </div>
+
+  <div class="field">
+    <label for="p-date">תאריך <span class="chg" id="chg-date" hidden>שונה</span></label>
+    <input id="p-date" type="date">
+    <p id="p-datelabel" class="datelabel"></p>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label for="p-start">שעת התחלה <span class="chg" id="chg-start" hidden>שונה</span></label>
+      <input id="p-start" type="time">
+    </div>
+    <div class="field" id="end-field">
+      <label for="p-end">שעת סיום <span class="chg" id="chg-end" hidden>שונה</span></label>
+      <input id="p-end" type="time">
+    </div>
+  </div>
+  <p id="need-end" class="hint" style="margin-top:-8px;margin-bottom:16px" hidden>
+    שעת הסיום לא נמסרה בהודעה — יש להזין אותה כדי ליצור את האירוע.
+  </p>
+
+  <div class="field">
+    <label for="p-loc">מיקום <span class="chg" id="chg-location" hidden>שונה</span></label>
+    <input id="p-loc" type="text" dir="auto">
+  </div>
+
+  <div id="prop-msg" class="msg err" hidden></div>
+
+  <div class="stack">
+    <button id="b-create" class="btn">
+      <span id="create-spin" class="spin" hidden></span>
+      <span id="create-label">יצירת האירוע</span>
+    </button>
+    <button id="b-alts" class="btn secondary" hidden>זה לא האירוע הנכון — בחירת אחר</button>
+    <button id="b-tocreate" class="btn secondary" hidden>יצירת אירוע חדש במקום</button>
+    <button id="b-back" class="btn secondary">חזרה לעריכת ההודעה</button>
+  </div>
+</section>
+
+<!-- ========================== RESULT =========================== -->
+<section id="s-done" class="screen">
+  <div class="done">
+    <div class="tick">✓</div>
+    <p class="lede" id="d-head" style="margin-bottom:8px"></p>
+    <p class="what" id="d-title"></p>
+    <p class="when" id="d-when"></p>
+  </div>
+  <div class="stack">
+    <button id="b-again" class="btn">אירוע נוסף</button>
+  </div>
+</section>
+
+<noscript><p class="msg err">האפליקציה דורשת JavaScript.</p></noscript>
+</main>
+
+<script>
+'use strict';
+
+/* ================================================================
+   CONFIG — the Apps Script web-app /exec URL.
+   Paste it below, then bump CACHE_VERSION in sw.js so phones pick it up.
+   ================================================================ */
+const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9Zh5CQesZ8jLyJYsmlNeFxyIGScUcfPXwvJAYJoeBShyrYeh5/exec';
+
+/* ---- constants ------------------------------------------------ */
+const LS_SECRET = 'fc.secret';
+const LS_USER   = 'fc.user';
+
+const MAX_EDGE  = 1568;   // longest edge before re-encoding
+const JPEG_Q    = 0.8;
+
+const T_PING  = 20000;
+const T_TEXT  = 45000;
+const T_IMAGE = 90000;    // image parses are slow; never cut them off early
+
+const HE_DAYS = ['יום ראשון','יום שני','יום שלישי','יום רביעי','יום חמישי','יום שישי','שבת'];
+
+const $ = id => document.getElementById(id);
+
+const FIELDS   = ['title','date','start','end','location'];
+const INPUT_OF = { title:'p-title', date:'p-date', start:'p-start', end:'p-end', location:'p-loc' };
+const CHG_OF   = { title:'chg-title', date:'chg-date', start:'chg-start', end:'chg-end', location:'chg-location' };
+
+const state = {
+  secret:'', user:'',
+  image:null,      // {mediaType, data, preview}
+  event:{},        // parsed event from the last `parse` — never null, so the
+                   // proposal helpers can read it without guarding every time
+  mode:'create',   // 'create' | 'update'
+  match:null,      // the existing event the backend thinks is being edited
+  alts:[],         // other candidates the backend offered
+  setupReturn:null // screen to go back to when setup was opened from the gear
+};
+
+/* ---- screens -------------------------------------------------- */
+function show(name){
+  for (const s of document.querySelectorAll('.screen')) s.classList.remove('active');
+  $('s-' + name).classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+function say(el, text, kind){
+  const node = $(el);
+  node.hidden = !text;
+  node.textContent = text || '';
+  if (kind) node.className = 'msg ' + kind;
+}
+
+/* ---- backend -------------------------------------------------- */
+/* Apps Script never answers a CORS preflight, so the content type must stay
+   inside the safelist. The body is still JSON — only the header differs. */
+async function api(payload, timeoutMs){
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(BACKEND_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body:    JSON.stringify(payload),
+      redirect:'follow',
+      signal:  ctrl.signal
+    });
+    const raw = await res.text();
+    try { return JSON.parse(raw); }
+    catch { throw new Error('bad-json'); }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function netMessage(err){
+  if (err && err.name === 'AbortError') return 'הבקשה ארכה זמן רב מדי. נסו שוב.';
+  if (err && err.message === 'bad-json') return 'תשובה לא תקינה מהשרת. בדקו את כתובת ה-Web App.';
+  return 'אין תקשורת עם השרת. בדקו את חיבור האינטרנט.';
+}
+
+/* A rejected secret always goes back to setup, whichever screen it happened on. */
+function isUnauthorized(error){
+  return String(error || '').toLowerCase().includes('unauthorized');
+}
+function failedWith(error, msgEl){
+  if (isUnauthorized(error)){
+    localStorage.removeItem(LS_SECRET);
+    state.secret = '';
+    openSetup('הסיסמה המשותפת נדחתה. הזינו אותה מחדש.');
+    return;
+  }
+  say(msgEl, error || 'שגיאה לא ידועה.', 'err');
+}
+
+function busy(btn, spin, label, on, text){
+  $(btn).disabled = on;
+  $(spin).hidden  = !on;
+  $(label).textContent = text;
+}
+
+/* ---- setup ---------------------------------------------------- */
+function openSetup(message){
+  state.setupReturn = state.secret && state.user ? 's-input' : null;
+  $('i-secret').value = state.secret;
+  $('i-user').value   = state.user;
+  $('b-setup-cancel').hidden = !state.setupReturn;
+  say('setup-msg', message || '', 'err');
+  show('setup');
+  $('i-secret').focus();
+}
+
+async function connect(){
+  const secret = $('i-secret').value.trim();
+  const user   = $('i-user').value.trim();
+  if (!secret || !user){
+    say('setup-msg', 'יש למלא את שני השדות.', 'err');
+    return;
+  }
+  say('setup-msg', '', 'err');
+  busy('b-connect', 'connect-spin', 'connect-label', true, 'בודק…');
+  try {
+    const r = await api({ secret, action:'ping' }, T_PING);
+    if (!r.ok){
+      say('setup-msg', isUnauthorized(r.error)
+        ? 'הסיסמה המשותפת שגויה.'
+        : (r.error || 'הבדיקה נכשלה.'), 'err');
+      return;
+    }
+    /* only the secret and the display name persist — nothing else */
+    localStorage.setItem(LS_SECRET, secret);
+    localStorage.setItem(LS_USER, user);
+    state.secret = secret;
+    state.user   = user;
+    setWho(r.calendar);
+    say('setup-msg', 'מחובר ליומן: ' + (r.calendar || '—'), 'ok');
+    setTimeout(() => { if ($('s-setup').classList.contains('active')) show('input'); }, 1400);
+  } catch (e){
+    say('setup-msg', netMessage(e), 'err');
+  } finally {
+    busy('b-connect', 'connect-spin', 'connect-label', false, 'התחברות ובדיקה');
+  }
+}
+
+function setWho(board){
+  const parts = [];
+  if (state.user) parts.push('נוצר כ־' + state.user);
+  if (board) parts.push('יומן: ' + board);
+  $('who').textContent = parts.join(' · ');
+}
+
+/* ---- image ---------------------------------------------------- */
+function decode(file){
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload  = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode')); };
+    img.src = url;
+  });
+}
+
+/* Phone photos are 3–8MB. Downscale and re-encode before they ever hit the wire. */
+async function attach(file){
+  if (!file) return;
+  if (!/^image\//.test(file.type)){
+    say('input-msg', 'אפשר לצרף תמונות בלבד.', 'err');
+    return;
+  }
+  try {
+    const img   = await decode(file);
+    const scale = Math.min(1, MAX_EDGE / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width  * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+
+    const url = canvas.toDataURL('image/jpeg', JPEG_Q);
+    state.image = {
+      mediaType: 'image/jpeg',
+      data: url.slice(url.indexOf(',') + 1),   // raw base64, no data: prefix
+      preview: url
+    };
+    $('thumb-img').src = url;
+    $('thumb').hidden = false;
+    say('input-msg', '', 'err');
+  } catch {
+    say('input-msg', 'לא הצלחתי לקרוא את התמונה. נסו קובץ אחר.', 'err');
+  }
+}
+
+function detach(){
+  state.image = null;
+  $('thumb').hidden = true;
+  $('thumb-img').removeAttribute('src');
+  $('f-pick').value = '';
+  $('f-cam').value  = '';
+}
+
+/* ---- parse ---------------------------------------------------- */
+async function parse(){
+  const text = $('i-text').value.trim();
+  if (!text && !state.image){
+    say('input-msg', 'הדביקו הודעה או צרפו תמונה.', 'err');
+    return;
+  }
+  say('input-msg', '', 'err');
+
+  const withImage = !!state.image;
+  busy('b-parse', 'parse-spin', 'parse-label', true,
+       withImage ? 'קורא את התמונה…' : 'מנתח…');
+
+  const payload = { secret: state.secret, action: 'parse' };
+  if (text) payload.text = text;
+  if (withImage) payload.image = { mediaType: state.image.mediaType, data: state.image.data };
+
+  try {
+    const r = await api(payload, withImage ? T_IMAGE : T_TEXT);
+    if (!r.ok){ failedWith(r.error, 'input-msg'); return; }
+    fillProposal(r);
+    show('prop');
+  } catch (e){
+    say('input-msg', netMessage(e), 'err');
+  } finally {
+    busy('b-parse', 'parse-spin', 'parse-label', false, 'ניתוח ההודעה');
+  }
+}
+
+/* ---- dates ---------------------------------------------------- */
+function heDate(iso){
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);          // local — avoids the UTC off-by-one
+  return HE_DAYS[dt.getDay()] + ', ' + dt.getDate() + '.' + (dt.getMonth() + 1) + '.' + dt.getFullYear();
+}
+
+function whenText(ev){
+  const time = [ev.start, ev.end].filter(Boolean).join('–');
+  return [heDate(ev.date), time].filter(Boolean).join(' · ');
+}
+
+function stampDate(){
+  $('p-datelabel').textContent = heDate($('p-date').value);
+}
+
+/* ---- proposal ------------------------------------------------- */
+function fillProposal(res){
+  state.event = res.event || {};
+  state.alts  = Array.isArray(res.alternatives) ? res.alternatives.filter(a => a && a.id) : [];
+
+  /* A backend that sends no `intent` behaves exactly as it always did:
+     everything is a create. The edit path lights up on its own once the
+     backend starts returning intent/match. */
+  const wantsUpdate = res.intent === 'update' && res.match && res.match.id;
+  state.match = wantsUpdate ? res.match : null;
+  state.mode  = wantsUpdate ? 'update' : 'create';
+
+  say('p-note', (state.event.note || '').trim(), 'note');
+  say('prop-msg', '', 'err');
+  applyMode();
+}
+
+/* An update must not blank the fields the message never mentioned. */
+function mergeOnto(match, parsed){
+  const out = {};
+  for (const f of FIELDS){
+    const v = parsed[f];
+    out[f] = (v === null || v === undefined || v === '') ? (match[f] || '') : v;
+  }
+  return out;
+}
+
+function applyMode(){
+  const upd = state.mode === 'update' && !!state.match;
+  const src = upd ? mergeOnto(state.match, state.event) : state.event;
+
+  $('p-title').value = src.title    || '';
+  $('p-date').value  = src.date     || '';
+  $('p-start').value = src.start    || '';
+  $('p-end').value   = src.end      || '';   // never pre-fill a guess
+  $('p-loc').value   = src.location || '';
+
+  $('p-heading').textContent = upd ? 'עדכון אירוע קיים' : 'אישור אירוע';
+  $('p-lede').textContent = upd
+    ? 'זוהה עדכון לאירוע שכבר קיים ביומן. ודאו שזה האירוע הנכון לפני האישור.'
+    : 'בדקו את הפרטים לפני היצירה. שום דבר לא נוצר עד לאישור.';
+
+  $('need-title').hidden = !state.event.needsTitle;
+  $('p-title').classList.toggle('suggest', !!state.event.needsTitle);
+
+  renderMatch(upd);
+  renderAlts();
+  $('b-tocreate').hidden = !upd;
+  $('b-alts').hidden     = !(upd && state.alts.length);
+  $('p-altlist').hidden  = true;
+
+  stampDate();
+  markChanges();
+  validate();
+}
+
+function renderMatch(upd){
+  $('p-current').hidden = !upd;
+  if (!upd){ say('p-recurring', '', 'note'); return; }
+  const m = state.match;
+  $('c-title').textContent = m.title || '—';
+  $('c-when').textContent  = whenText(m) || '—';
+  $('c-loc').textContent   = m.location || '—';
+  /* the brief's rule: single instance, never the series */
+  say('p-recurring', m.recurring
+    ? 'זהו אירוע חוזר. העדכון יחול על המופע הזה בלבד — לא על כל הסדרה.'
+    : '', 'note');
+}
+
+function renderAlts(){
+  const list = $('p-altlist');
+  list.textContent = '';
+  for (const a of state.alts){
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'alt';
+    const title = document.createElement('b');
+    title.textContent = a.title || '(ללא כותרת)';
+    const when = document.createElement('span');
+    when.textContent = whenText(a);
+    btn.append(title, when);
+    btn.addEventListener('click', () => {
+      const prev = state.match;
+      state.alts = state.alts.filter(x => x !== a);
+      if (prev) state.alts.unshift(prev);   // so you can switch back
+      state.match = a;
+      applyMode();
+    });
+    list.append(btn);
+  }
+}
+
+/* Show which fields this edit actually changes on the existing event. */
+function markChanges(){
+  const upd = state.mode === 'update' && !!state.match;
+  for (const f of FIELDS){
+    const badge = $(CHG_OF[f]);
+    if (!upd){ badge.hidden = true; continue; }
+    badge.hidden = $(INPUT_OF[f]).value.trim() === String(state.match[f] || '').trim();
+  }
+}
+
+/* The backend rejects a null end, so the button stays locked until there is one. */
+function validate(){
+  const filled = $('p-title').value.trim() && $('p-date').value
+              && $('p-start').value && $('p-end').value;
+  $('b-create').disabled = !filled;
+
+  const flagEnd = !!state.event.needsEnd && !$('p-end').value;
+  $('need-end').hidden = !flagEnd;
+  $('end-field').classList.toggle('needs', flagEnd);
+
+  $('create-label').textContent =
+    state.mode === 'update' && state.match ? 'עדכון האירוע' : 'יצירת האירוע';
+}
+
+async function submit(){
+  const upd = state.mode === 'update' && !!state.match;
+  const ev = {
+    title:    $('p-title').value.trim(),
+    date:     $('p-date').value,
+    start:    $('p-start').value,
+    end:      $('p-end').value,
+    location: $('p-loc').value.trim(),
+    needsEnd:   false,
+    needsTitle: false,
+    note: (state.event && state.event.note) || ''
+  };
+  const payload = upd
+    ? { secret:state.secret, action:'update', user:state.user,
+        id:state.match.id, scope:'instance', event:ev }
+    : { secret:state.secret, action:'create', user:state.user, event:ev };
+
+  say('prop-msg', '', 'err');
+  busy('b-create', 'create-spin', 'create-label', true, upd ? 'מעדכן…' : 'יוצר…');
+  try {
+    const r = await api(payload, T_TEXT);
+    if (!r.ok){ failedWith(r.error, 'prop-msg'); return; }  // proposal stays intact
+    $('d-head').textContent  = upd ? 'האירוע עודכן' : 'האירוע נוצר';
+    $('d-title').textContent = ev.title;
+    $('d-when').textContent  = r.when || whenText(ev);
+    show('done');
+  } catch (e){
+    say('prop-msg', netMessage(e), 'err');
+  } finally {
+    busy('b-create', 'create-spin', 'create-label', false, upd ? 'עדכון האירוע' : 'יצירת האירוע');
+  }
+}
+
+function reset(){
+  $('i-text').value = '';
+  detach();
+  state.event = {};
+  state.mode  = 'create';
+  state.match = null;
+  state.alts  = [];
+  say('input-msg', '', 'err');
+  show('input');
+  $('i-text').focus();
+}
+
+/* ---- wiring --------------------------------------------------- */
+$('b-connect').addEventListener('click', connect);
+$('b-setup-cancel').addEventListener('click', () => show('input'));
+$('i-user').addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+
+$('b-settings').addEventListener('click', () => openSetup(''));
+$('b-parse').addEventListener('click', parse);
+
+$('b-pick').addEventListener('click', () => $('f-pick').click());
+$('b-cam').addEventListener('click',  () => $('f-cam').click());
+$('f-pick').addEventListener('change', e => attach(e.target.files[0]));
+$('f-cam').addEventListener('change',  e => attach(e.target.files[0]));
+$('b-unthumb').addEventListener('click', detach);
+
+/* pasting a screenshot straight into the box is the common path */
+$('i-text').addEventListener('paste', e => {
+  const files = e.clipboardData && e.clipboardData.files;
+  if (!files || !files.length) return;
+  const img = Array.prototype.find.call(files, f => /^image\//.test(f.type));
+  if (img){ e.preventDefault(); attach(img); }
+});
+
+$('b-create').addEventListener('click', submit);
+$('b-back').addEventListener('click', () => show('input'));   // text + image kept
+$('b-again').addEventListener('click', reset);
+
+$('b-alts').addEventListener('click', () => {
+  $('p-altlist').hidden = !$('p-altlist').hidden;
+});
+/* the escape hatch when the backend guessed the wrong event, or guessed
+   "update" at all: fall back to a plain create with the parsed values */
+$('b-tocreate').addEventListener('click', () => {
+  state.mode  = 'create';
+  state.match = null;
+  applyMode();
+});
+
+for (const id of ['p-title','p-date','p-start','p-end','p-loc']){
+  $(id).addEventListener('input', () => {
+    if (id === 'p-date') stampDate();
+    markChanges();
+    validate();
+  });
+}
+
+/* ---- boot ----------------------------------------------------- */
+state.secret = localStorage.getItem(LS_SECRET) || '';
+state.user   = localStorage.getItem(LS_USER)   || '';
+
+if (state.secret && state.user){
+  setWho('');
+  show('input');
+  $('i-text').focus();
+  /* quiet ping just to put the board name in the header; failures stay silent
+     so a flaky network never blocks the input screen */
+  api({ secret: state.secret, action:'ping' }, T_PING)
+    .then(r => { if (r && r.ok) setWho(r.calendar); })
+    .catch(() => {});
+} else {
+  openSetup('');
+}
+
+if ('serviceWorker' in navigator){
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>

@@ -87,6 +87,15 @@ input.time,input.date{
 }
 input.time.bad,input.date.bad{border-color:var(--danger);background:var(--danger-bg)}
 textarea{min-height:150px;resize:vertical;line-height:1.55}
+
+/* dir=auto picks a direction from the first strong character of the *value*,
+   and an empty field has none — so it falls back to LTR and puts the Hebrew
+   placeholder on the wrong side. While the placeholder is showing, force RTL;
+   the moment there is real text, dir=auto takes over again and English pasted
+   from a message still lays out correctly. Scoped to [dir=auto] so the LTR
+   time and date fields keep their own alignment. */
+input[dir=auto]:placeholder-shown,
+textarea[dir=auto]:placeholder-shown{direction:rtl}
 .field{margin-bottom:16px}
 .row{display:flex;gap:12px}
 .row .field{flex:1;min-width:0}

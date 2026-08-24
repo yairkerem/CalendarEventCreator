@@ -164,6 +164,7 @@ textarea[dir=auto]:placeholder-shown{direction:rtl}
 .field.needs label{color:var(--warn)}
 input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .hint{font-size:.8rem;margin:6px 0 0;color:var(--warn)}
+.hint.muted{color:var(--muted)}
 .datelabel{font-size:.85rem;color:var(--muted);margin:6px 0 0}
 
 /* ---- follow-up question -------------------------------------- */
@@ -274,7 +275,14 @@ button{font:inherit;cursor:pointer}
   </div>
   <div class="field">
     <label for="i-user">שם תצוגה</label>
-    <input id="i-user" type="text" autocomplete="name" enterkeyhint="done" placeholder="השם שלך">
+    <input id="i-user" type="text" autocomplete="name" enterkeyhint="next" placeholder="השם שלך">
+  </div>
+
+  <div class="field">
+    <label for="i-people">שמות לבחירה</label>
+    <input id="i-people" type="text" dir="auto" autocomplete="off" enterkeyhint="done"
+           placeholder="למשל: דנה, איתי, נועה">
+    <p class="hint muted">מופרדים בפסיקים. נשמר במכשיר הזה בלבד ומופיע ככפתורים במסך האישור.</p>
   </div>
 
   <!-- device-local decoration; never sent anywhere -->
@@ -468,6 +476,9 @@ const LS_USER   = 'fc.user';
 /* Cached so the name buttons are there on launch instead of waiting for the
    ping. Device-local only — the list itself lives in the backend. */
 const LS_PEOPLE = 'fc.people';
+/* 'user' once the list has been typed in settings, 'backend' while it is
+   whatever ping supplied. */
+const LS_PEOPLE_SRC = 'fc.people.src';
 
 const LS_BG     = 'fc.bg';
 const LS_BGPOS  = 'fc.bgpos';
@@ -576,6 +587,7 @@ function openSetup(message){
   state.setupReturn = state.secret && state.user ? 's-input' : null;
   $('i-secret').value = state.secret;
   $('i-user').value   = state.user;
+  $('i-people').value = state.people.join(', ');
   $('b-setup-cancel').hidden = !state.setupReturn;
   say('setup-msg', message || '', 'err');
   show('setup');
@@ -605,7 +617,16 @@ async function connect(){
     state.secret = secret;
     state.user   = user;
     setWho(r.calendar, r.version);
-    setPeople(r.people);
+
+    /* A typed list is the user's; an empty field hands control back to the
+       backend, so clearing it is also how you undo a local list. */
+    const typed = parsePeople($('i-people').value);
+    if (typed.length){
+      setPeople(typed, 'user');
+    } else {
+      try { localStorage.removeItem(LS_PEOPLE_SRC); } catch {}
+      setPeople(r.people || [], 'backend');
+    }
     say('setup-msg', 'מחובר ליומן: ' + (r.calendar || '—'), 'ok');
     setTimeout(() => { if ($('s-setup').classList.contains('active')) show('input'); }, 1400);
   } catch (e){
@@ -1093,11 +1114,32 @@ function renderPeople(){
   }
 }
 
-function setPeople(list){
+function parsePeople(text){
+  const seen = [];
+  for (const raw of String(text || '').split(',')){
+    const n = raw.trim();
+    if (n && seen.indexOf(n) === -1) seen.push(n);
+  }
+  return seen;
+}
+
+/* A list typed in settings wins over the one the backend offers, and keeps
+   winning — otherwise the next ping would quietly overwrite it. Clearing the
+   field is how you hand control back to the backend. */
+function setPeople(list, src){
   if (!Array.isArray(list)) return;
+  if (src === 'backend' && peopleSource() === 'user') return;
+
   state.people = list.filter(n => typeof n === 'string' && n.trim()).map(n => n.trim());
-  try { localStorage.setItem(LS_PEOPLE, JSON.stringify(state.people)); } catch {}
+  try {
+    localStorage.setItem(LS_PEOPLE, JSON.stringify(state.people));
+    localStorage.setItem(LS_PEOPLE_SRC, src);
+  } catch {}
   renderPeople();
+}
+
+function peopleSource(){
+  try { return localStorage.getItem(LS_PEOPLE_SRC) || ''; } catch { return ''; }
 }
 
 function renderAlts(){
@@ -1231,7 +1273,8 @@ window.addEventListener('resize', () => { if (bg.url) applyBgPos(); });
 
 $('b-connect').addEventListener('click', connect);
 $('b-setup-cancel').addEventListener('click', () => show('input'));
-$('i-user').addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+$('i-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('i-people').focus(); });
+$('i-people').addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
 
 $('b-settings').addEventListener('click', () => openSetup(''));
 $('b-parse').addEventListener('click', parse);
@@ -1306,7 +1349,7 @@ if (state.secret && state.user){
   /* quiet ping just to put the board name in the header; failures stay silent
      so a flaky network never blocks the input screen */
   api({ secret: state.secret, action:'ping' }, T_PING)
-    .then(r => { if (r && r.ok){ setWho(r.calendar, r.version); setPeople(r.people); } })
+    .then(r => { if (r && r.ok){ setWho(r.calendar, r.version); setPeople(r.people || [], 'backend'); } })
     .catch(() => {});
 } else {
   openSetup('');

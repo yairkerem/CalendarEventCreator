@@ -80,11 +80,34 @@ body.has-bg::after{content:'';position:fixed;inset:0;pointer-events:none}
 body.has-bg::before{
   z-index:-2;
   background-image:var(--bg-image);
-  background-size:cover; background-position:center; background-repeat:no-repeat;
+  background-size:cover; background-position:var(--bg-pos,50% 50%);
+  background-repeat:no-repeat;
 }
 body.has-bg::after{z-index:-1;background:var(--scrim)}
 :root{--scrim:rgba(244,246,249,.80)}
 @media (prefers-color-scheme:dark){:root{--scrim:rgba(14,17,22,.82)}}
+
+/* ---- dragging the background into place ----------------------- */
+/* While adjusting, the app gets out of the way and the scrim lifts, so what
+   you drag is the photo itself rather than a dimmed guess at it. */
+body.adjusting main{display:none}
+body.adjusting.has-bg::after{background:transparent}
+.bgadjust{
+  position:fixed; inset:0; z-index:50;
+  touch-action:none;            /* the drag must not scroll the page */
+  cursor:grab;
+  display:flex; flex-direction:column; justify-content:flex-end;
+  padding:max(14px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right))
+          max(20px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));
+}
+.bgadjust:active{cursor:grabbing}
+.bgadjust .panel{
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius); padding:14px; box-shadow:var(--shadow);
+}
+.bgadjust .panel p{margin:0 0 12px;font-size:.9rem;color:var(--muted);text-align:center}
+.bgadjust .panel .btn{margin-bottom:8px}
+.bgadjust .panel .btn:last-child{margin-bottom:0}
 
 main{max-width:560px;margin:0 auto;position:relative}
 h1{font-size:1.45rem;margin:.2em 0 .3em}
@@ -259,6 +282,7 @@ button{font:inherit;cursor:pointer}
     <label>תמונת רקע</label>
     <div class="attach" style="margin-top:0">
       <button type="button" id="b-bg-pick" class="chip">🖼️ בחירת תמונה</button>
+      <button type="button" id="b-bg-move" class="chip" hidden>✥ מיקום התמונה</button>
       <button type="button" id="b-bg-clear" class="chip" hidden>הסרת הרקע</button>
     </div>
     <input id="f-bg" type="file" accept="image/*" hidden>
@@ -420,6 +444,15 @@ button{font:inherit;cursor:pointer}
 <noscript><p class="msg err">האפליקציה דורשת JavaScript.</p></noscript>
 </main>
 
+<!-- full-screen drag surface; outside <main> so it survives main being hidden -->
+<div id="bg-adjust" class="bgadjust" hidden>
+  <div class="panel">
+    <p id="bg-adjust-hint">גררו את התמונה כדי לבחור את החלק שיוצג</p>
+    <button type="button" id="b-bg-save" class="btn">שמירת המיקום</button>
+    <button type="button" id="b-bg-cancel" class="btn secondary">ביטול</button>
+  </div>
+</div>
+
 <script>
 'use strict';
 
@@ -437,6 +470,7 @@ const LS_USER   = 'fc.user';
 const LS_PEOPLE = 'fc.people';
 
 const LS_BG     = 'fc.bg';
+const LS_BGPOS  = 'fc.bgpos';
 
 const MAX_EDGE  = 1568;   // longest edge before re-encoding
 const JPEG_Q    = 0.8;
@@ -640,15 +674,77 @@ async function attach(file){
 /* ---- background image ----------------------------------------- */
 /* Purely local decoration: it lives in this device's localStorage and is never
    sent to the backend or the model. */
+const bg = { url:'', x:50, y:50, nat:null };   // nat = natural pixel size
+
 function applyBg(url){
-  if (url){
-    document.body.style.setProperty('--bg-image', 'url("' + url + '")');
+  bg.url = url || '';
+  if (bg.url){
+    document.body.style.setProperty('--bg-image', 'url("' + bg.url + '")');
     document.body.classList.add('has-bg');
   } else {
     document.body.style.removeProperty('--bg-image');
     document.body.classList.remove('has-bg');
   }
-  $('b-bg-clear').hidden = !url;
+  applyBgPos();
+  $('b-bg-clear').hidden = !bg.url;
+  $('b-bg-move').hidden  = !bg.url;
+}
+
+function applyBgPos(){
+  document.body.style.setProperty('--bg-pos', bg.x + '% ' + bg.y + '%');
+}
+
+function saveBgPos(){
+  try { localStorage.setItem(LS_BGPOS, JSON.stringify({ x:bg.x, y:bg.y })); } catch {}
+}
+
+/* Natural size is needed to know how far the image can actually travel. */
+function bgDims(url){
+  return new Promise(resolve => {
+    const im = new Image();
+    im.onload  = () => resolve({ w: im.naturalWidth, h: im.naturalHeight });
+    im.onerror = () => resolve(null);
+    im.src = url;
+  });
+}
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/* With background-size:cover the image overflows the screen on one axis only.
+   `overflow` is how many pixels of it are off-screen, and 0%→100% pans exactly
+   that distance — so a drag of `dx` pixels is worth dx/overflow of the range.
+   An axis with no overflow cannot move, and stays centred. */
+function bgOverflow(){
+  const W = window.innerWidth, H = window.innerHeight;
+  if (!bg.nat) return { x:0, y:0 };
+  const s = Math.max(W / bg.nat.w, H / bg.nat.h);
+  return { x: bg.nat.w * s - W, y: bg.nat.h * s - H };
+}
+
+let bgDrag = null;
+
+async function openBgAdjust(){
+  if (!bg.url) return;
+  if (!bg.nat) bg.nat = await bgDims(bg.url);
+  bgDrag = { startX:0, startY:0, fromX:bg.x, fromY:bg.y, active:false,
+             wasX:bg.x, wasY:bg.y };
+
+  const o = bgOverflow();
+  $('bg-adjust-hint').textContent =
+    (o.x < 1 && o.y < 1)
+      ? 'התמונה במידות המסך — אין חלק נוסף להזיז.'
+      : 'גררו את התמונה כדי לבחור את החלק שיוצג';
+
+  document.body.classList.add('adjusting');
+  $('bg-adjust').hidden = false;
+}
+
+function closeBgAdjust(keep){
+  if (!keep && bgDrag){ bg.x = bgDrag.wasX; bg.y = bgDrag.wasY; applyBgPos(); }
+  bgDrag = null;
+  document.body.classList.remove('adjusting');
+  $('bg-adjust').hidden = true;
+  if (keep){ saveBgPos(); say('setup-msg', 'מיקום הרקע נשמר.', 'ok'); }
 }
 
 async function pickBg(file){
@@ -667,8 +763,11 @@ async function pickBg(file){
       say('setup-msg', 'התמונה גדולה מדי לשמירה. נסו תמונה קטנה יותר.', 'err');
       return;
     }
+    bg.x = 50; bg.y = 50;          // a new photo starts centred
+    bg.nat = await bgDims(url);
+    saveBgPos();
     applyBg(url);
-    say('setup-msg', 'הרקע עודכן.', 'ok');
+    say('setup-msg', 'הרקע עודכן. אפשר לגרור אותו למיקום הרצוי.', 'ok');
   } catch {
     say('setup-msg', 'לא הצלחתי לקרוא את התמונה. נסו קובץ אחר.', 'err');
   } finally {
@@ -678,6 +777,8 @@ async function pickBg(file){
 
 function clearBg(){
   localStorage.removeItem(LS_BG);
+  localStorage.removeItem(LS_BGPOS);
+  bg.x = 50; bg.y = 50; bg.nat = null;
   applyBg('');
   say('setup-msg', 'הרקע הוסר.', 'ok');
 }
@@ -1096,6 +1197,37 @@ function reset(){
 $('b-bg-pick').addEventListener('click', () => $('f-bg').click());
 $('f-bg').addEventListener('change', e => pickBg(e.target.files[0]));
 $('b-bg-clear').addEventListener('click', clearBg);
+$('b-bg-move').addEventListener('click', openBgAdjust);
+$('b-bg-save').addEventListener('click', () => closeBgAdjust(true));
+$('b-bg-cancel').addEventListener('click', () => closeBgAdjust(false));
+
+/* Drag anywhere on the overlay except the control panel itself. */
+const bgSurface = $('bg-adjust');
+bgSurface.addEventListener('pointerdown', e => {
+  if (!bgDrag || e.target.closest('.panel')) return;
+  bgDrag.startX = e.clientX; bgDrag.startY = e.clientY;
+  bgDrag.fromX  = bg.x;      bgDrag.fromY  = bg.y;
+  bgDrag.active = true;
+  bgSurface.setPointerCapture(e.pointerId);
+});
+
+bgSurface.addEventListener('pointermove', e => {
+  if (!bgDrag || !bgDrag.active) return;
+  e.preventDefault();
+  const o = bgOverflow();
+  /* dragging right reveals what is off the left edge, so the position falls */
+  if (o.x >= 1) bg.x = clamp(bgDrag.fromX - (e.clientX - bgDrag.startX) / o.x * 100, 0, 100);
+  if (o.y >= 1) bg.y = clamp(bgDrag.fromY - (e.clientY - bgDrag.startY) / o.y * 100, 0, 100);
+  applyBgPos();
+});
+
+for (const ev of ['pointerup','pointercancel']){
+  bgSurface.addEventListener(ev, () => { if (bgDrag) bgDrag.active = false; });
+}
+
+/* Rotating the phone changes the overflow, so the same percentages now frame a
+   different crop — nothing to recompute, but a redraw keeps it honest. */
+window.addEventListener('resize', () => { if (bg.url) applyBgPos(); });
 
 $('b-connect').addEventListener('click', connect);
 $('b-setup-cancel').addEventListener('click', () => show('input'));
@@ -1156,7 +1288,14 @@ for (const id of ['p-start','p-end','p-date']){
 /* ---- boot ----------------------------------------------------- */
 state.secret = localStorage.getItem(LS_SECRET) || '';
 state.user   = localStorage.getItem(LS_USER)   || '';
-try { applyBg(localStorage.getItem(LS_BG) || ''); } catch { applyBg(''); }
+try {
+  const saved = JSON.parse(localStorage.getItem(LS_BGPOS) || 'null');
+  if (saved && isFinite(saved.x) && isFinite(saved.y)){
+    bg.x = clamp(saved.x, 0, 100);
+    bg.y = clamp(saved.y, 0, 100);
+  }
+  applyBg(localStorage.getItem(LS_BG) || '');
+} catch { applyBg(''); }
 try { state.people = JSON.parse(localStorage.getItem(LS_PEOPLE) || '[]'); } catch { state.people = []; }
 if (!Array.isArray(state.people)) state.people = [];
 

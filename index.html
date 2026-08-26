@@ -187,6 +187,22 @@ input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .current dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:.92rem}
 .current dt{color:var(--muted)}
 .current dd{margin:0;overflow-wrap:anywhere}
+/* ---- what else is on that day --------------------------------- */
+.daylist{display:flex;flex-direction:column;gap:6px}
+.daylist .row{
+  display:flex;gap:10px;align-items:baseline;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:9px 12px;font-size:.9rem;
+}
+.daylist .row.clash{border-color:var(--warn-bd);background:var(--warn-bg)}
+.daylist .row.self{border-color:var(--accent);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 40%,transparent)}
+.daylist .t{color:var(--muted);direction:ltr;font-variant-numeric:tabular-nums;white-space:nowrap}
+.daylist .n{flex:1;min-width:0;overflow-wrap:anywhere}
+.daylist .tag{font-size:.72rem;font-weight:600;color:var(--warn);white-space:nowrap}
+.daylist .row.self .tag{color:var(--accent)}
+.daylist .none{color:var(--muted);font-size:.9rem;padding:2px 0}
+
 .altlist{display:flex;flex-direction:column;gap:8px;margin:0 0 16px}
 .alt{width:100%;text-align:start;background:var(--surface);color:var(--text);
   border:1px solid var(--border);border-radius:var(--radius);
@@ -423,6 +439,13 @@ button{font:inherit;cursor:pointer}
     <input id="p-loc" type="text" dir="auto">
   </div>
 
+  <!-- read-only view of the day being written into; hidden entirely on a
+       backend too old to answer the `day` action -->
+  <div class="field" id="day-field" hidden>
+    <label>מה כבר קיים ביום הזה</label>
+    <div id="day-list" class="daylist"></div>
+  </div>
+
   <div id="prop-msg" class="msg err" hidden></div>
 
   <div class="stack">
@@ -494,6 +517,7 @@ const BG_Q      = 0.72;
 const T_PING  = 20000;
 const T_TEXT  = 45000;
 const T_IMAGE = 90000;    // image parses are slow; never cut them off early
+const T_DAY   = 20000;
 
 const HE_DAYS = ['יום ראשון','יום שני','יום שלישי','יום רביעי','יום חמישי','יום שישי','שבת'];
 
@@ -1014,6 +1038,10 @@ function fillProposal(res){
 
   say('p-note', (state.event.note || '').trim(), 'note');
   say('prop-msg', '', 'err');
+
+  /* a fresh parse always re-reads the day; the calendar may have moved on */
+  dayView.date = ''; dayView.state = 'idle'; dayView.events = [];
+
   applyMode();
 }
 
@@ -1058,6 +1086,7 @@ function applyMode(){
   stampDate();
   markChanges();
   validate();
+  loadDay(false);
 }
 
 function renderMatch(upd){
@@ -1071,6 +1100,113 @@ function renderMatch(upd){
   say('p-recurring', m.recurring
     ? 'זהו אירוע חוזר. העדכון יחול על המופע הזה בלבד — לא על כל הסדרה.'
     : '', 'note');
+}
+
+/* ---- what else is on that day --------------------------------- */
+/* An event that crosses midnight is stored with end <= start; for the purpose
+   of "do these two clash" it runs to the end of the day. */
+function span(s, e){ return (e && e > s) ? [s, e] : [s, '24:00']; }
+
+function clashes(aS, aE, bS, bE){
+  const a = span(aS, aE), b = span(bS, bE);
+  return a[0] < b[1] && b[0] < a[1];
+}
+
+function renderDay(){
+  const box = $('day-list');
+  box.textContent = '';
+
+  if (dayView.state === 'loading'){
+    const p = document.createElement('p');
+    p.className = 'none';
+    p.textContent = 'טוען…';
+    box.append(p);
+    return;
+  }
+  if (!dayView.events.length){
+    const p = document.createElement('p');
+    p.className = 'none';
+    p.textContent = 'היומן פנוי ביום זה.';
+    box.append(p);
+    return;
+  }
+
+  const myStart = $('p-start').value, myEnd = $('p-end').value;
+  const mine    = state.match && state.match.id;
+
+  for (const ev of dayView.events){
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const t = document.createElement('span');
+    t.className = 't';
+    t.textContent = ev.allDay ? 'כל היום' : (ev.start + '–' + ev.end);
+
+    const n = document.createElement('span');
+    n.className = 'n';
+    n.textContent = ev.title || '(ללא כותרת)';
+
+    row.append(t, n);
+
+    /* the event being edited is not a clash with itself */
+    if (mine && ev.id === mine){
+      row.classList.add('self');
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = 'האירוע שמתעדכן';
+      row.append(tag);
+    } else if (!ev.allDay && validTime(myStart) && validTime(myEnd) &&
+               clashes(myStart, myEnd, ev.start, ev.end)){
+      row.classList.add('clash');
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = 'חופף';
+      row.append(tag);
+    }
+
+    box.append(row);
+  }
+}
+
+const dayView = { date:'', state:'idle', events:[], seq:0, timer:null };
+
+/* Old backends answer `day` with "unknown action" — in that case the whole
+   section stays hidden rather than showing an error for a feature the user
+   never asked to see. */
+async function loadDay(force){
+  const iso = dateISO();
+  if (!iso){ $('day-field').hidden = true; return; }
+  if (!force && iso === dayView.date && dayView.state === 'done'){ renderDay(); return; }
+
+  const seq = ++dayView.seq;
+  dayView.date = iso;
+  dayView.state = 'loading';
+  $('day-field').hidden = false;
+  renderDay();
+
+  try {
+    const r = await api({ secret: state.secret, action:'day', date: iso }, T_DAY);
+    if (seq !== dayView.seq) return;            // a newer date won the race
+    if (!r.ok){
+      dayView.state = 'idle';
+      $('day-field').hidden = true;             // unsupported or refused: stay quiet
+      return;
+    }
+    dayView.events = Array.isArray(r.events) ? r.events : [];
+    dayView.state  = 'done';
+    renderDay();
+  } catch {
+    if (seq !== dayView.seq) return;
+    dayView.state = 'idle';
+    $('day-field').hidden = true;               // never block confirming on this
+  }
+}
+
+/* Typing a date fires on every keystroke; only the settled value is worth a
+   round trip. */
+function loadDaySoon(){
+  clearTimeout(dayView.timer);
+  dayView.timer = setTimeout(() => loadDay(false), 450);
 }
 
 /* ---- who the event is for ------------------------------------- */
@@ -1230,6 +1366,9 @@ function reset(){
   state.mode  = 'create';
   state.match = null;
   state.alts  = [];
+  clearTimeout(dayView.timer);
+  dayView.date = ''; dayView.state = 'idle'; dayView.events = [];
+  $('day-field').hidden = true;
   say('input-msg', '', 'err');
   show('input');
   $('i-text').focus();
@@ -1312,8 +1451,8 @@ $('b-tocreate').addEventListener('click', () => {
 
 for (const id of ['p-title','p-date','p-start','p-end','p-loc']){
   $(id).addEventListener('input', () => {
-    if (id === 'p-date'){ dateInput($(id)); stampDate(); }
-    if (id === 'p-start' || id === 'p-end') timeInput($(id));
+    if (id === 'p-date'){ dateInput($(id)); stampDate(); loadDaySoon(); }
+    if (id === 'p-start' || id === 'p-end'){ timeInput($(id)); renderDay(); }
     if (id === 'p-title') renderPeople();   // typing a name lights its chip
     markChanges();
     validate();
@@ -1322,7 +1461,8 @@ for (const id of ['p-title','p-date','p-start','p-end','p-loc']){
 
 for (const id of ['p-start','p-end','p-date']){
   $(id).addEventListener('blur', () => {
-    if (id === 'p-date') dateBlur($(id)); else timeBlur($(id));
+    if (id === 'p-date'){ dateBlur($(id)); loadDay(false); }
+    else { timeBlur($(id)); renderDay(); }
     markChanges();
     validate();
   });

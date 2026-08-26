@@ -203,6 +203,19 @@ input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .daylist .row.self .tag{color:var(--accent)}
 .daylist .none{color:var(--muted);font-size:.9rem;padding:2px 0}
 
+/* ---- update bar ----------------------------------------------- */
+.updatebar{
+  position:fixed;z-index:40;
+  inset-inline:max(14px,env(safe-area-inset-left)) max(14px,env(safe-area-inset-right));
+  bottom:max(14px,env(safe-area-inset-bottom));
+  max-width:560px;margin:0 auto;
+  display:flex;align-items:center;gap:10px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:10px 14px;box-shadow:var(--shadow);
+}
+.updatebar span{flex:1;min-width:0;font-size:.9rem}
+.updatebar .chip{flex:0 0 auto}
+
 .altlist{display:flex;flex-direction:column;gap:8px;margin:0 0 16px}
 .alt{width:100%;text-align:start;background:var(--surface);color:var(--text);
   border:1px solid var(--border);border-radius:var(--radius);
@@ -312,6 +325,14 @@ button{font:inherit;cursor:pointer}
     <input id="f-bg" type="file" accept="image/*" hidden>
   </div>
 
+  <div class="field">
+    <label>גרסה</label>
+    <div class="attach" style="margin-top:0">
+      <button type="button" id="b-check-update" class="chip">🔄 בדיקת עדכון</button>
+    </div>
+    <p class="hint muted" id="ver-line"></p>
+  </div>
+
   <div id="setup-msg" class="msg" hidden></div>
 
   <div class="stack">
@@ -408,6 +429,15 @@ button{font:inherit;cursor:pointer}
     <p id="need-title" class="hint" hidden>הכותרת היא הצעה — כדאי לעבור עליה.</p>
   </div>
 
+  <!-- a bare weekday that landed on tomorrow: ask rather than guess -->
+  <div id="dayq" class="msg note" hidden>
+    <p id="dayq-text" style="margin:0 0 10px"></p>
+    <div class="attach" style="margin-top:0">
+      <button type="button" id="b-day-tom"  class="chip"></button>
+      <button type="button" id="b-day-next" class="chip"></button>
+    </div>
+  </div>
+
   <div class="field">
     <label for="p-date">תאריך <span class="chg" id="chg-date" hidden>שונה</span></label>
     <input id="p-date" class="date" type="text" inputmode="numeric" maxlength="10"
@@ -475,6 +505,11 @@ button{font:inherit;cursor:pointer}
 <noscript><p class="msg err">האפליקציה דורשת JavaScript.</p></noscript>
 </main>
 
+<div id="update-bar" class="updatebar" hidden>
+  <span>גרסה חדשה של האפליקציה מוכנה</span>
+  <button type="button" id="b-update" class="chip">עדכון</button>
+</div>
+
 <!-- full-screen drag surface; outside <main> so it survives main being hidden -->
 <div id="bg-adjust" class="bgadjust" hidden>
   <div class="panel">
@@ -494,6 +529,10 @@ button{font:inherit;cursor:pointer}
 const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9Zh5CQesZ8jLyJYsmlNeFxyIGScUcfPXwvJAYJoeBShyrYeh5/exec';
 
 /* ---- constants ------------------------------------------------ */
+/* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
+   say which build it is actually running. */
+const APP_VERSION = 10;
+
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
 /* Cached so the name buttons are there on launch instead of waiting for the
@@ -539,6 +578,7 @@ const state = {
   mode:'create',   // 'create' | 'update'
   match:null,      // the existing event the backend thinks is being edited
   alts:[],         // other candidates the backend offered
+  ambiguous:null,  // {weekday,tomorrow,nextWeek} when a bare weekday hit tomorrow
   people:[],       // family names, supplied by the backend on ping
   history:[],      // [{role,content}] of the current clarification exchange
   setupReturn:null // screen to go back to when setup was opened from the gear
@@ -1036,6 +1076,9 @@ function fillProposal(res){
   state.match = wantsUpdate ? res.match : null;
   state.mode  = wantsUpdate ? 'update' : 'create';
 
+  const amb = res.ambiguousDay;
+  state.ambiguous = (amb && amb.tomorrow && amb.nextWeek) ? amb : null;
+
   say('p-note', (state.event.note || '').trim(), 'note');
   say('prop-msg', '', 'err');
 
@@ -1086,6 +1129,7 @@ function applyMode(){
   stampDate();
   markChanges();
   validate();
+  renderDayQuestion();
   loadDay(false);
 }
 
@@ -1100,6 +1144,33 @@ function renderMatch(upd){
   say('p-recurring', m.recurring
     ? 'זהו אירוע חוזר. העדכון יחול על המופע הזה בלבד — לא על כל הסדרה.'
     : '', 'note');
+}
+
+/* ---- "did you mean tomorrow, or next week?" -------------------- */
+/* Only ever raised when a bare weekday resolved to tomorrow. Someone who meant
+   tomorrow would have said מחר, so neither reading is safe to assume. */
+function renderDayQuestion(){
+  const a = state.ambiguous;
+  $('dayq').hidden = !a;
+  if (!a) return;
+
+  $('dayq-text').textContent =
+    'נאמר "' + (a.weekday || 'יום בשבוע') + '" בלי תאריך. מחר, או בשבוע הבא?';
+
+  const current = dateISO();
+  const wire = (id, iso, label) => {
+    const b = $(id);
+    b.textContent = label + ' · ' + dateShow(iso);
+    b.className = 'chip' + (current === iso ? ' on' : '');
+    b.onclick = () => {
+      $('p-date').value = dateShow(iso);
+      stampDate(); markChanges(); validate();
+      loadDay(false);
+      renderDayQuestion();
+    };
+  };
+  wire('b-day-tom',  a.tomorrow, 'מחר');
+  wire('b-day-next', a.nextWeek, 'בשבוע הבא');
 }
 
 /* ---- what else is on that day --------------------------------- */
@@ -1366,6 +1437,8 @@ function reset(){
   state.mode  = 'create';
   state.match = null;
   state.alts  = [];
+  state.ambiguous = null;
+  $('dayq').hidden = true;
   clearTimeout(dayView.timer);
   dayView.date = ''; dayView.state = 'idle'; dayView.events = [];
   $('day-field').hidden = true;
@@ -1468,6 +1541,81 @@ for (const id of ['p-start','p-end','p-date']){
   });
 }
 
+/* ---- updates --------------------------------------------------- */
+/* The worker no longer activates itself, so a new version installs and waits.
+   That turns "the app changed under me mid-sentence" into a button.
+
+   updateViaCache:'none' matters: GitHub Pages serves sw.js with max-age=600,
+   so without it the browser can check for updates against a cached copy of the
+   very file it is trying to update. */
+let swReg = null;
+let swReloading = false;
+
+function showUpdateBar(on){ $('update-bar').hidden = !on; }
+
+function watchInstalling(worker){
+  if (!worker) return;
+  worker.addEventListener('statechange', () => {
+    /* no controller means this is the first install, not an update */
+    if (worker.state === 'installed' && navigator.serviceWorker.controller) showUpdateBar(true);
+  });
+}
+
+function applyUpdate(){
+  if (swReg && swReg.waiting){
+    swReg.waiting.postMessage({ type:'SKIP_WAITING' });   // controllerchange reloads
+  } else {
+    location.reload();
+  }
+}
+
+async function checkUpdate(){
+  if (!swReg){
+    say('setup-msg', 'עדכונים אינם נתמכים בדפדפן הזה.', 'err');
+    return;
+  }
+  say('setup-msg', 'בודק…', 'ok');
+  try {
+    await swReg.update();
+    if (swReg.waiting){
+      showUpdateBar(true);
+      say('setup-msg', 'נמצאה גרסה חדשה — לחצו על "עדכון".', 'ok');
+    } else if (swReg.installing){
+      say('setup-msg', 'מוריד גרסה חדשה…', 'ok');
+    } else {
+      say('setup-msg', 'האפליקציה מעודכנת (גרסה ' + APP_VERSION + ').', 'ok');
+    }
+  } catch {
+    say('setup-msg', 'בדיקת העדכון נכשלה. בדקו את החיבור.', 'err');
+  }
+}
+
+$('b-update').addEventListener('click', applyUpdate);
+$('b-check-update').addEventListener('click', checkUpdate);
+$('ver-line').textContent = 'גרסת אפליקציה: ' + APP_VERSION;
+
+if ('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swReloading) return;      // fires once per activation; guard the reload
+    swReloading = true;
+    location.reload();
+  });
+
+  window.addEventListener('load', async () => {
+    try {
+      swReg = await navigator.serviceWorker.register('./sw.js', { updateViaCache:'none' });
+      if (swReg.waiting && navigator.serviceWorker.controller) showUpdateBar(true);
+      watchInstalling(swReg.installing);
+      swReg.addEventListener('updatefound', () => watchInstalling(swReg.installing));
+    } catch {}
+  });
+
+  /* Coming back to the app is the natural moment to look for a new version. */
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && swReg) swReg.update().catch(() => {});
+  });
+}
+
 /* ---- boot ----------------------------------------------------- */
 state.secret = localStorage.getItem(LS_SECRET) || '';
 state.user   = localStorage.getItem(LS_USER)   || '';
@@ -1493,10 +1641,6 @@ if (state.secret && state.user){
     .catch(() => {});
 } else {
   openSetup('');
-}
-
-if ('serviceWorker' in navigator){
-  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
 }
 </script>
 </body>

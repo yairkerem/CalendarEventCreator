@@ -7,7 +7,7 @@
  * cross-origin POST, and the guard in fetch() below only ever handles
  * same-origin GETs. Responses from the backend never enter the cache.
  */
-const CACHE_VERSION = 'v9';
+const CACHE_VERSION = 'v10';
 const CACHE = 'event-creator-shell-' + CACHE_VERSION;
 
 const SHELL = [
@@ -18,12 +18,18 @@ const SHELL = [
   './icon-512.png'
 ];
 
+/* No skipWaiting() here on purpose. A new worker installs and then waits, so
+ * the app can offer the update instead of reloading out from under someone
+ * who is halfway through typing a message. The page sends SKIP_WAITING when
+ * the user accepts. */
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE)
-      .then(cache => cache.addAll(SHELL))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE).then(cache => cache.addAll(SHELL))
   );
+});
+
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {

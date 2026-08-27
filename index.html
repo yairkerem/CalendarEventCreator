@@ -463,6 +463,7 @@ button{font:inherit;cursor:pointer}
   <div class="field" id="people-field" hidden>
     <label>למי האירוע</label>
     <div class="attach" id="people" style="margin-top:0"></div>
+    <p id="people-spread" class="hint muted" hidden></p>
   </div>
 
   <div class="field">
@@ -605,7 +606,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 13;
+const APP_VERSION = 14;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1189,6 +1190,7 @@ function loadItem(){
   state.amendLog = [];
   state.amended  = [];
   clearAmend();
+  $('people-spread').hidden = true;
 
   const amb = state.event.ambiguousDay;
   state.ambiguous = (amb && amb.tomorrow && amb.nextWeek) ? amb : null;
@@ -1704,10 +1706,42 @@ function stripPerson(title){
   return p ? title.slice(p.length + SEP.length) : title;
 }
 
+function withPerson(title, name){
+  const base = stripPerson(String(title || '').trim());
+  return name ? name + SEP + base : base;
+}
+
+/* One paragraph listing a week of training is one child's week, so naming the
+   first event names the rest. Only events still ahead in the queue are
+   touched: what is already in the calendar is not ours to rewrite, and a
+   skipped event is not going there at all. */
 function setPerson(name){
-  const base = stripPerson($('p-title').value.trim());
-  $('p-title').value = name ? name + SEP + base : base;
+  $('p-title').value = withPerson($('p-title').value, name);
+
+  /* the field is the truth for the event on screen, edits and all */
+  if (state.batch[state.bi]){
+    state.batch[state.bi] = Object.assign({}, state.batch[state.bi],
+      { title: $('p-title').value.trim() });
+    state.event = state.batch[state.bi];
+  }
+
+  let spread = 0;
+  for (let i = state.bi + 1; i < state.batch.length; i++){
+    if (state.outcomes[i]) continue;
+    state.batch[i] = Object.assign({}, state.batch[i],
+      { title: withPerson(state.batch[i].title, name) });
+    spread++;
+  }
+
+  const rest = spread === 1 ? 'האירוע הבא ברשימה'
+                            : spread + ' האירועים הבאים ברשימה';
+  $('people-spread').hidden = !spread;
+  $('people-spread').textContent = !spread ? ''
+    : name ? 'השם הוחל גם על ' + rest + '.'
+           : 'השם הוסר גם מ' + (spread === 1 ? '' : '-') + rest + '.';
+
   renderPeople();
+  renderBatch();
   markChanges();
   validate();
 }
@@ -1883,6 +1917,7 @@ function reset(){
   state.amendLog = [];
   state.amended  = [];
   clearAmend();
+  $('people-spread').hidden = true;
   state.ambiguous = null;
   $('p-batch').hidden = true;
   $('b-skip').hidden  = true;

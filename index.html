@@ -177,6 +177,15 @@ input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .qa-log .said{font-size:.88rem;color:var(--muted);padding-inline-start:14px;
   border-inline-start:2px solid var(--border)}
 
+/* ---- free-text correction ------------------------------------- */
+.amend-label{display:block;font-size:.8rem;font-weight:600;color:var(--muted);margin:0 0 8px}
+/* the shared spinner is drawn for an accent background; on a secondary
+   button that would be white on white */
+.btn.secondary .spin{
+  border-color:color-mix(in srgb,var(--text) 25%,transparent);
+  border-top-color:var(--text);
+}
+
 /* ---- update mode --------------------------------------------- */
 .chg{display:inline-block;margin-inline-start:6px;padding:1px 8px;border-radius:999px;
   font-size:.72rem;font-weight:600;
@@ -526,6 +535,19 @@ button{font:inherit;cursor:pointer}
     <div id="day-list" class="daylist"></div>
   </div>
 
+  <!-- Some corrections are quicker to say than to type into the fields above,
+       and a wrong date is the usual one. Applies to the event on screen. -->
+  <div class="qa" id="amend">
+    <div id="amend-log" class="qa-log" hidden></div>
+    <label for="i-amend" class="amend-label">משהו לא נכון? כתבו את התיקון</label>
+    <input id="i-amend" type="text" dir="auto" autocomplete="off" enterkeyhint="send"
+           placeholder="למשל: ראשון זה ה-6.9, לא ה-30.8">
+    <button type="button" id="b-amend" class="btn secondary" style="margin-top:10px">
+      <span id="amend-spin" class="spin" hidden></span>
+      <span id="amend-label">עדכון הפרטים</span>
+    </button>
+  </div>
+
   <div id="prop-msg" class="msg err" hidden></div>
 
   <div class="stack">
@@ -583,7 +605,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 12;
+const APP_VERSION = 13;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -634,6 +656,8 @@ const state = {
   outcomes:[],     // 'made' | 'skipped' per batch index, sparse until decided
   created:[],      // {title, when} for each one that actually reached the calendar
   repeat:'none',   // 'none' | 'weekly' — what the chips on screen currently say
+  amendLog:[],     // [{role,content}] of the corrections typed for THIS event
+  amended:[],      // fields the last correction moved, so the badges can say so
   mode:'create',   // 'create' | 'update'
   match:null,      // the existing event the backend thinks is being edited
   alts:[],         // other candidates the backend offered
@@ -1161,6 +1185,11 @@ function fillProposal(res){
 function loadItem(){
   state.event = state.batch[state.bi] || {};
 
+  /* corrections belong to the event they were typed about */
+  state.amendLog = [];
+  state.amended  = [];
+  clearAmend();
+
   const amb = state.event.ambiguousDay;
   state.ambiguous = (amb && amb.tomorrow && amb.nextWeek) ? amb : null;
 
@@ -1378,6 +1407,120 @@ function renderDayQuestion(){
   };
   wire('b-day-tom',  a.tomorrow, 'מחר');
   wire('b-day-next', a.nextWeek, 'בשבוע הבא');
+}
+
+/* ---- free-text correction of the event on screen ---------------- */
+/* The fields above are editable, but "this one is next week" is a sentence,
+   not five edits. The correction is applied to the event on screen only; the
+   rest of the queue is untouched. */
+const LABEL_OF = { title:'כותרת', date:'תאריך', start:'שעת התחלה',
+                   end:'שעת סיום', location:'מיקום' };
+
+/** The event exactly as the form shows it right now. */
+function formEvent(){
+  return {
+    title:    fieldValue('title'),
+    date:     fieldValue('date'),
+    start:    fieldValue('start'),
+    end:      fieldValue('end'),
+    location: fieldValue('location'),
+    repeat:      state.repeat,
+    repeatUntil: state.repeat === 'weekly' ? untilISO() : ''
+  };
+}
+
+function clearAmend(){
+  $('i-amend').value = '';
+  $('amend-log').textContent = '';
+  $('amend-log').hidden = true;
+}
+
+function renderAmendLog(){
+  const log = $('amend-log');
+  log.textContent = '';
+  log.hidden = !state.amendLog.length;
+  for (const t of state.amendLog){
+    const p = document.createElement('p');
+    p.className = t.role === 'assistant' ? 'ask' : 'said';
+    p.textContent = t.content;
+    log.append(p);
+  }
+}
+
+async function amend(){
+  const text = $('i-amend').value.trim();
+  if (!text){ say('prop-msg', 'יש לכתוב מה לתקן.', 'err'); return; }
+
+  const before = formEvent();
+  say('prop-msg', '', 'err');
+  busy('b-amend', 'amend-spin', 'amend-label', true, 'מעדכן…');
+  try {
+    const r = await api({
+      secret: state.secret, action: 'amend',
+      event: before, text: text,
+      history: state.amendLog.slice(),
+      source: $('i-text').value.trim()
+    }, T_TEXT);
+
+    /* An older backend answers "unknown action"; say so plainly rather than
+       leaving the user typing into a box that does nothing. */
+    if (!r.ok){
+      failedWith(/unknown action/i.test(r.error || '')
+        ? 'התיקון בטקסט דורש גרסה חדשה יותר של השרת.' : r.error, 'prop-msg');
+      return;
+    }
+
+    state.amendLog.push({ role:'user', content: text });
+    $('i-amend').value = '';
+
+    if (r.status === 'question' && r.question){
+      state.amendLog.push({ role:'assistant', content: r.question });
+      renderAmendLog();
+      $('i-amend').focus();
+      return;
+    }
+
+    const changed = applyAmend(before, r.event || {});
+    state.amendLog.push({ role:'assistant', content: changed.length
+      ? 'עודכן: ' + changed.map(f => LABEL_OF[f]).join(', ')
+      : 'לא נמצא מה לשנות.' });
+    renderAmendLog();
+  } catch (e){
+    say('prop-msg', netMessage(e), 'err');
+  } finally {
+    busy('b-amend', 'amend-spin', 'amend-label', false, 'עדכון הפרטים');
+  }
+}
+
+/** Writes the corrected event onto the form; returns the fields that moved. */
+function applyAmend(before, ev){
+  const changed = FIELDS.filter(f => String(ev[f] || '') !== String(before[f] || ''));
+
+  $('p-title').value = ev.title    || '';
+  $('p-date').value  = dateShow(ev.date);
+  $('p-start').value = ev.start    || '';
+  $('p-end').value   = ev.end      || '';
+  $('p-loc').value   = ev.location || '';
+  for (const id of ['p-title','p-date','p-start','p-end','p-loc']) $(id).classList.remove('bad');
+
+  /* The queue row, the day view and the "which day did you mean" prompt all
+     read the item, so the item has to move with the form. Repetition is not
+     part of a text correction and stays exactly as the chips left it. */
+  const item = Object.assign({}, state.batch[state.bi], ev, {
+    repeat:      before.repeat,
+    repeatUntil: before.repeatUntil
+  });
+  state.batch[state.bi] = item;
+  state.event = item;
+  state.amended = changed;
+
+  const amb = ev.ambiguousDay;
+  state.ambiguous = (amb && amb.tomorrow && amb.nextWeek) ? amb : null;
+  say('p-note', (ev.note || '').trim(), 'note');
+
+  stampDate(); stampUntil(); markChanges(); validate();
+  renderDayQuestion(); renderBatch(); loadDay(false);
+  return changed;
 }
 
 /* ---- weekly series --------------------------------------------- */
@@ -1639,12 +1782,16 @@ function renderAlts(){
 }
 
 /* Show which fields this edit actually changes on the existing event. */
+/* The "שונה" badge answers "what moved": against the calendar event being
+   edited in update mode, and against what the last correction changed
+   otherwise. Both readings are the same question about the field. */
 function markChanges(){
   const upd = state.mode === 'update' && !!state.match;
   for (const f of FIELDS){
     const badge = $(CHG_OF[f]);
-    if (!upd){ badge.hidden = true; continue; }
-    badge.hidden = fieldValue(f) === String(state.match[f] || '').trim();
+    badge.hidden = upd
+      ? fieldValue(f) === String(state.match[f] || '').trim()
+      : state.amended.indexOf(f) === -1;
   }
 }
 
@@ -1733,6 +1880,9 @@ function reset(){
   state.match  = null;
   state.alts   = [];
   state.repeat = 'none';
+  state.amendLog = [];
+  state.amended  = [];
+  clearAmend();
   state.ambiguous = null;
   $('p-batch').hidden = true;
   $('b-skip').hidden  = true;
@@ -1810,6 +1960,8 @@ $('i-text').addEventListener('paste', e => {
 
 $('b-create').addEventListener('click', submit);
 $('b-skip').addEventListener('click', skipItem);
+$('b-amend').addEventListener('click', amend);
+$('i-amend').addEventListener('keydown', e => { if (e.key === 'Enter') amend(); });
 $('b-repeat-off').addEventListener('click',  () => setRepeat('none'));
 $('b-repeat-week').addEventListener('click', () => setRepeat('weekly'));
 

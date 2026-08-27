@@ -606,7 +606,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 14;
+const APP_VERSION = 15;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -616,6 +616,11 @@ const LS_PEOPLE = 'fc.people';
 /* 'user' once the list has been typed in settings, 'backend' while it is
    whatever ping supplied. */
 const LS_PEOPLE_SRC = 'fc.people.src';
+
+/* Must match sw.js — the two halves of the share hand-off. */
+const SHARE_CACHE = 'event-creator-share';
+const SHARE_FILE  = './__shared-image';
+const SHARE_TEXT  = './__shared-text';
 
 const LS_BG     = 'fc.bg';
 const LS_BGPOS  = 'fc.bgpos';
@@ -838,6 +843,47 @@ async function attach(file){
   } catch {
     say('input-msg', 'לא הצלחתי לקרוא את התמונה. נסו קובץ אחר.', 'err');
   }
+}
+
+/* ---- shared in from another app -------------------------------- */
+/* A photo forwarded from WhatsApp reaches the service worker as a POST, which
+   parks it in a cache and redirects here. This is the collection end: it takes
+   whatever is waiting, hands it to the ordinary attach path, and clears it so
+   the same photo cannot arrive twice. */
+async function takeShared(){
+  const got = { image:false, text:false };
+  if (!('caches' in window)) return got;
+
+  try {
+    const cache = await caches.open(SHARE_CACHE);
+
+    const textRes = await cache.match(SHARE_TEXT);
+    if (textRes){
+      const text = (await textRes.text()).trim();
+      await cache.delete(SHARE_TEXT);
+      if (text){ $('i-text').value = text; got.text = true; }
+    }
+
+    const fileRes = await cache.match(SHARE_FILE);
+    if (fileRes){
+      const blob = await fileRes.blob();
+      await cache.delete(SHARE_FILE);
+      if (blob && blob.size){
+        await attach(blob);
+        got.image = !!state.image;
+      }
+    }
+  } catch {
+    // a share we cannot read is not worth breaking the boot over
+  }
+  return got;
+}
+
+function sharedMessage(got){
+  if (got.image && got.text) return 'התמונה והטקסט ששיתפתם נקלטו.';
+  if (got.image)             return 'התמונה ששיתפתם צורפה.';
+  if (got.text)              return 'ההודעה ששיתפתם הודבקה.';
+  return '';
 }
 
 /* ---- background image ----------------------------------------- */
@@ -2128,6 +2174,17 @@ if (state.secret && state.user){
   setWho('');
   show('input');
   $('i-text').focus();
+
+  /* Anything shared in from another app is collected here, once the input
+     screen is up. Before setup it is deliberately left in the cache: it would
+     have nowhere to land, and the next launch can still have it. */
+  takeShared().then(got => {
+    const msg = sharedMessage(got);
+    if (msg) say('input-msg', msg, 'ok');
+    /* a share arrives as ./?shared=1; a reload should not look like one */
+    if (location.search) history.replaceState(null, '', location.pathname);
+  });
+
   /* quiet ping just to put the board name in the header; failures stay silent
      so a flaky network never blocks the input screen */
   api({ secret: state.secret, action:'ping' }, T_PING)

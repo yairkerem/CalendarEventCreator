@@ -7,7 +7,7 @@
  * cross-origin POST, and the guard in fetch() below only ever handles
  * same-origin GETs. Responses from the backend never enter the cache.
  */
-const CACHE_VERSION = 'v13';
+const CACHE_VERSION = 'v14';
 const CACHE = 'event-creator-shell-' + CACHE_VERSION;
 
 const SHELL = [

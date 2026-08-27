@@ -203,6 +203,27 @@ input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .daylist .row.self .tag{color:var(--accent)}
 .daylist .none{color:var(--muted);font-size:.9rem;padding:2px 0}
 
+/* ---- several events out of one message ------------------------ */
+/* Deliberately not named .done — that class already styles the result screen
+   and would centre these rows. */
+.batch{margin:0 0 18px}
+.batch h3{margin:0 0 8px;font-size:.8rem;font-weight:600;color:var(--muted)}
+.batch .list{display:flex;flex-direction:column;gap:6px}
+.batch .row{
+  display:flex;gap:10px;align-items:baseline;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:9px 12px;font-size:.9rem;
+}
+.batch .row.now{border-color:var(--accent);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 40%,transparent)}
+.batch .row.past{opacity:.55}
+.batch .d{color:var(--muted);white-space:nowrap}
+.batch .t{color:var(--muted);direction:ltr;font-variant-numeric:tabular-nums;white-space:nowrap}
+.batch .n{flex:1;min-width:0;overflow-wrap:anywhere}
+.batch .mark{font-size:.72rem;font-weight:600;white-space:nowrap;color:var(--muted)}
+.batch .row.now .mark{color:var(--accent)}
+.batch .row.made .mark{color:var(--ok)}
+
 /* ---- update bar ----------------------------------------------- */
 .updatebar{
   position:fixed;z-index:40;
@@ -287,6 +308,11 @@ button{font:inherit;cursor:pointer}
 }
 .done .what{font-size:1.2rem;font-weight:600;margin:0 0 6px}
 .done .when{color:var(--muted);margin:0;direction:ltr}
+.madelist{display:flex;flex-direction:column;gap:8px;text-align:start;margin:18px 0 0}
+.madelist .row{display:block;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:10px 12px}
+.madelist b{display:block;font-weight:600;font-size:.95rem;overflow-wrap:anywhere}
+.madelist span{display:block;color:var(--muted);font-size:.85rem;direction:ltr}
 </style>
 </head>
 <body>
@@ -402,6 +428,13 @@ button{font:inherit;cursor:pointer}
   <h1 id="p-heading">אישור אירוע</h1>
   <p class="lede" id="p-lede">בדקו את הפרטים לפני היצירה. שום דבר לא נוצר עד לאישור.</p>
 
+  <!-- One message can describe a whole week of training. The events are
+       confirmed one at a time, and this is the queue behind the current one. -->
+  <div id="p-batch" class="batch" hidden>
+    <h3 id="p-batch-head"></h3>
+    <div id="p-batch-list" class="list"></div>
+  </div>
+
   <div id="p-recurring" class="msg note" hidden></div>
 
   <div id="p-current" class="current" hidden>
@@ -469,6 +502,23 @@ button{font:inherit;cursor:pointer}
     <input id="p-loc" type="text" dir="auto">
   </div>
 
+  <!-- Weekly series. Offered on new events only: an edit always touches the
+       one occurrence it found, which is the rule the brief sets. -->
+  <div class="field" id="repeat-field" hidden>
+    <label>חזרה</label>
+    <div class="attach" style="margin-top:0">
+      <button type="button" id="b-repeat-off"  class="chip">פעם אחת</button>
+      <button type="button" id="b-repeat-week" class="chip">כל שבוע</button>
+    </div>
+  </div>
+
+  <div class="field" id="until-field" hidden>
+    <label for="p-until">חוזר עד</label>
+    <input id="p-until" class="date" type="text" inputmode="numeric" maxlength="10"
+           placeholder="DD/MM/YYYY" autocomplete="off" enterkeyhint="done">
+    <p id="p-untillabel" class="datelabel"></p>
+  </div>
+
   <!-- read-only view of the day being written into; hidden entirely on a
        backend too old to answer the `day` action -->
   <div class="field" id="day-field" hidden>
@@ -483,6 +533,7 @@ button{font:inherit;cursor:pointer}
       <span id="create-spin" class="spin" hidden></span>
       <span id="create-label">יצירת האירוע</span>
     </button>
+    <button id="b-skip" class="btn secondary" hidden>דילוג על האירוע הזה</button>
     <button id="b-alts" class="btn secondary" hidden>זה לא האירוע הנכון — בחירת אחר</button>
     <button id="b-tocreate" class="btn secondary" hidden>יצירת אירוע חדש במקום</button>
     <button id="b-back" class="btn secondary">חזרה לעריכת ההודעה</button>
@@ -496,6 +547,7 @@ button{font:inherit;cursor:pointer}
     <p class="lede" id="d-head" style="margin-bottom:8px"></p>
     <p class="what" id="d-title"></p>
     <p class="when" id="d-when"></p>
+    <div class="madelist" id="d-list" hidden></div>
   </div>
   <div class="stack">
     <button id="b-again" class="btn">אירוע נוסף</button>
@@ -531,7 +583,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 10;
+const APP_VERSION = 12;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -559,6 +611,8 @@ const T_IMAGE = 90000;    // image parses are slow; never cut them off early
 const T_DAY   = 20000;
 
 const HE_DAYS = ['יום ראשון','יום שני','יום שלישי','יום רביעי','יום חמישי','יום שישי','שבת'];
+/* The queue rows are one line each, and "יום רביעי" would eat the whole line. */
+const HE_SHORT = ['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
 
 const $ = id => document.getElementById(id);
 
@@ -573,8 +627,13 @@ const MAX_QA = 4;
 const state = {
   secret:'', user:'',
   image:null,      // {mediaType, data, preview}
-  event:{},        // parsed event from the last `parse` — never null, so the
-                   // proposal helpers can read it without guarding every time
+  event:{},        // the event on screen — never null, so the proposal helpers
+                   // can read it without guarding every time
+  batch:[],        // every event the last parse returned, in order
+  bi:0,            // which one of them is on screen
+  outcomes:[],     // 'made' | 'skipped' per batch index, sparse until decided
+  created:[],      // {title, when} for each one that actually reached the calendar
+  repeat:'none',   // 'none' | 'weekly' — what the chips on screen currently say
   mode:'create',   // 'create' | 'update'
   match:null,      // the existing event the backend thinks is being edited
   alts:[],         // other candidates the backend offered
@@ -992,12 +1051,15 @@ function dateShow(iso){
   return p[2] + '/' + p[1] + '/' + p[0];
 }
 
-function dateISO(){
-  const d = $('p-date').value.replace(/\D/g, '');
+function dateISOof(el){
+  const d = el.value.replace(/\D/g, '');
   if (d.length !== 8) return '';
   const iso = d.slice(4, 8) + '-' + d.slice(2, 4) + '-' + d.slice(0, 2);
   return realDate(iso) ? iso : '';
 }
+
+function dateISO(){  return dateISOof($('p-date'));  }
+function untilISO(){ return dateISOof($('p-until')); }
 
 /* Rejects 31/02 and friends: round-tripping through Date only survives a day
    that actually exists, which also settles leap years. */
@@ -1016,7 +1078,7 @@ function dateInput(el){
 }
 
 function dateBlur(el){
-  el.classList.toggle('bad', !!el.value && !dateISO());
+  el.classList.toggle('bad', !!el.value && !dateISOof(el));
 }
 
 /* Canonical value of a proposal field, whatever the field happens to display.
@@ -1066,26 +1128,163 @@ function timeBlur(el){
 
 /* ---- proposal ------------------------------------------------- */
 function fillProposal(res){
-  state.event = res.event || {};
-  state.alts  = Array.isArray(res.alternatives) ? res.alternatives.filter(a => a && a.id) : [];
+  /* A backend that sends no `events` behaves exactly as it always did: one
+     event, from `event`. The batch path lights up on its own once the backend
+     starts returning the array. */
+  const list = Array.isArray(res.events) && res.events.length
+    ? res.events.filter(e => e && typeof e === 'object')
+    : (res.event ? [res.event] : []);
 
-  /* A backend that sends no `intent` behaves exactly as it always did:
-     everything is a create. The edit path lights up on its own once the
-     backend starts returning intent/match. */
+  state.batch    = list;
+  state.bi       = 0;
+  state.outcomes = [];
+  state.created  = [];
+  state.alts     = Array.isArray(res.alternatives) ? res.alternatives.filter(a => a && a.id) : [];
+
+  /* Same story for `intent`: absent means create, which is what it always was. */
   const wantsUpdate = res.intent === 'update' && res.match && res.match.id;
   state.match = wantsUpdate ? res.match : null;
   state.mode  = wantsUpdate ? 'update' : 'create';
 
-  const amb = res.ambiguousDay;
+  /* An older backend hangs the ambiguity off the reply rather than the event. */
+  if (list.length && !list[0].ambiguousDay && res.ambiguousDay){
+    list[0].ambiguousDay = res.ambiguousDay;
+  }
+
+  loadItem();
+}
+
+/* ---- one message, several events ------------------------------- */
+/* They are confirmed one at a time on the screen that already exists, rather
+   than in a new bulk-create screen: every event still gets read, edited and
+   approved on its own, which is the rule the whole app is built around. */
+function loadItem(){
+  state.event = state.batch[state.bi] || {};
+
+  const amb = state.event.ambiguousDay;
   state.ambiguous = (amb && amb.tomorrow && amb.nextWeek) ? amb : null;
 
   say('p-note', (state.event.note || '').trim(), 'note');
   say('prop-msg', '', 'err');
 
-  /* a fresh parse always re-reads the day; the calendar may have moved on */
+  /* every item re-reads its day: the calendar may have moved on, and the
+     previous item in this same batch may have just landed on it */
   dayView.date = ''; dayView.state = 'idle'; dayView.events = [];
 
+  renderBatch();
   applyMode();
+  /* moving to the next item happens on a screen that is already open, so
+     nothing scrolls it back up on its own */
+  window.scrollTo(0, 0);
+}
+
+function renderBatch(){
+  const many = state.batch.length > 1;
+  $('p-batch').hidden = !many;
+  $('b-skip').hidden  = !many;
+  if (!many) return;
+
+  $('p-batch-head').textContent =
+    'זוהו ' + state.batch.length + ' אירועים בהודעה · ' +
+    (state.bi + 1) + ' מתוך ' + state.batch.length;
+
+  const box = $('p-batch-list');
+  box.textContent = '';
+
+  state.batch.forEach((ev, i) => {
+    const done = state.outcomes[i];
+    const row = document.createElement('div');
+    row.className = 'row' + (i === state.bi ? ' now' : '') +
+                    (done ? ' past' : '') + (done === 'made' ? ' made' : '');
+
+    const d = document.createElement('span');
+    d.className = 'd';
+    d.textContent = weekdayShort(ev.date);
+
+    const t = document.createElement('span');
+    t.className = 't';
+    t.textContent = [dateShow(ev.date).slice(0, 5), ev.start].filter(Boolean).join(' ');
+
+    const n = document.createElement('span');
+    n.className = 'n';
+    n.textContent = (ev.title || '(ללא כותרת)') + (ev.repeat === 'weekly' ? ' ⟳' : '');
+
+    row.append(d, t, n);
+
+    const mark = document.createElement('span');
+    mark.className = 'mark';
+    mark.textContent = done === 'made' ? '✓ נוצר'
+                     : done === 'skipped' ? 'דולג'
+                     : i === state.bi ? 'עכשיו' : '';
+    if (mark.textContent) row.append(mark);
+
+    box.append(row);
+  });
+}
+
+function weekdayShort(iso){
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  return HE_SHORT[new Date(y, m - 1, d).getDay()];
+}
+
+/* Forward only: an event is either created or passed over, and either way the
+   queue moves on. Going back would mean re-confirming something already in the
+   calendar, which is what the edit flow is for. */
+function advance(){
+  state.bi++;
+  if (state.bi < state.batch.length){ loadItem(); return; }
+
+  if (state.created.length){ renderDone(); show('done'); return; }
+
+  /* every event was skipped: nothing happened, so nothing to celebrate */
+  show('input');
+  say('input-msg', 'לא נוצר אף אירוע.', 'err');
+}
+
+function skipItem(){
+  state.outcomes[state.bi] = 'skipped';
+  advance();
+}
+
+/* What a created entry says about itself: the first occurrence, and — for a
+   series — how many follow it. */
+function madeWhen(m){
+  return m.count > 1 ? m.when + ' · כל שבוע, ' + m.count + ' מופעים' : m.when;
+}
+
+function renderDone(){
+  const made = state.created;
+  const upd  = made.length === 1 && made[0].updated;
+  const many = made.length > 1;
+
+  $('d-head').textContent = upd ? 'האירוע עודכן'
+                          : many ? 'נוצרו ' + made.length + ' אירועים'
+                          : made[0] && made[0].count > 1 ? 'הסדרה נוצרה'
+                          : 'האירוע נוצר';
+
+  $('d-title').hidden = many;
+  $('d-when').hidden  = many;
+  $('d-list').hidden  = !many;
+
+  if (!many){
+    $('d-title').textContent = made[0] ? made[0].title : '';
+    $('d-when').textContent  = made[0] ? madeWhen(made[0]) : '';
+    return;
+  }
+
+  const box = $('d-list');
+  box.textContent = '';
+  for (const m of made){
+    const row = document.createElement('div');
+    row.className = 'row';
+    const b = document.createElement('b');
+    b.textContent = m.title;
+    const s = document.createElement('span');
+    s.textContent = madeWhen(m);
+    row.append(b, s);
+    box.append(row);
+  }
 }
 
 /* An update must not blank the fields the message never mentioned. */
@@ -1118,6 +1317,14 @@ function applyMode(){
 
   $('need-title').hidden = !state.event.needsTitle;
   $('p-title').classList.toggle('suggest', !!state.event.needsTitle);
+
+  /* An edit is always one occurrence, so the series controls stay out of it. */
+  $('repeat-field').hidden = upd;
+  state.repeat = (!upd && src.repeat === 'weekly') ? 'weekly' : 'none';
+  $('p-until').value = dateShow(src.repeatUntil || '');
+  $('p-until').classList.remove('bad');
+  fillDefaultUntil();
+  renderRepeat();
 
   renderMatch(upd);
   renderAlts();
@@ -1164,13 +1371,72 @@ function renderDayQuestion(){
     b.className = 'chip' + (current === iso ? ' on' : '');
     b.onclick = () => {
       $('p-date').value = dateShow(iso);
-      stampDate(); markChanges(); validate();
+      stampDate(); stampUntil(); markChanges(); validate();
       loadDay(false);
       renderDayQuestion();
     };
   };
   wire('b-day-tom',  a.tomorrow, 'מחר');
   wire('b-day-next', a.nextWeek, 'בשבוע הבא');
+}
+
+/* ---- weekly series --------------------------------------------- */
+/* A series is always bounded. "Repeats forever" on a board two people share is
+   a thing nobody wants to unpick by hand later, so turning repetition on also
+   asks until when — pre-filled, visible, and editable. */
+const DEFAULT_WEEKS = 12;
+
+function plusDaysISO(iso, n){
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + n);   // Date normalises the overflow itself
+  const p = x => String(x).padStart(2, '0');
+  return dt.getFullYear() + '-' + p(dt.getMonth() + 1) + '-' + p(dt.getDate());
+}
+
+/** Weekly occurrences between two dates, both ends included. */
+function weekCount(fromISO, toISO){
+  if (!fromISO || !toISO) return 0;
+  const a = new Date(fromISO + 'T12:00'), b = new Date(toISO + 'T12:00');
+  const days = Math.round((b - a) / 864e5);
+  return days < 0 ? 0 : Math.floor(days / 7) + 1;
+}
+
+/* Repetition is never on with the end date left blank: that would be a locked
+   create button and no visible reason for it. The default is a suggestion the
+   hint line spells out in full, not a decision made behind the user's back. */
+function fillDefaultUntil(){
+  if (state.repeat !== 'weekly' || untilISO()) return;
+  const from = dateISO();
+  if (from) $('p-until').value = dateShow(plusDaysISO(from, DEFAULT_WEEKS * 7));
+}
+
+function setRepeat(mode){
+  state.repeat = mode;
+
+  /* The queue row shows a ⟳ for a series, so it has to hear about this too. */
+  if (state.batch[state.bi]) state.batch[state.bi].repeat = mode;
+
+  fillDefaultUntil();
+  renderRepeat();
+  renderBatch();
+}
+
+function renderRepeat(){
+  const weekly = state.repeat === 'weekly';
+  $('b-repeat-off').className  = 'chip' + (weekly ? '' : ' on');
+  $('b-repeat-week').className = 'chip' + (weekly ? ' on' : '');
+  $('until-field').hidden = !weekly || $('repeat-field').hidden;
+  stampUntil();
+  validate();
+}
+
+function stampUntil(){
+  const from = dateISO(), to = untilISO();
+  const n = weekCount(from, to);
+  $('p-untillabel').textContent = !to ? ''
+    : n < 1 ? 'התאריך מוקדם מהאירוע עצמו'
+    : heDate(to) + ' · ' + n + ' מופעים';
 }
 
 /* ---- what else is on that day --------------------------------- */
@@ -1382,22 +1648,34 @@ function markChanges(){
   }
 }
 
-/* The backend rejects a null end, so the button stays locked until there is one. */
+function repeatsWeekly(){
+  return state.repeat === 'weekly' && !$('repeat-field').hidden;
+}
+
+function createLabel(){
+  if (state.mode === 'update' && state.match) return 'עדכון האירוע';
+  return repeatsWeekly() ? 'יצירת הסדרה' : 'יצירת האירוע';
+}
+
+/* The backend rejects a null end, so the button stays locked until there is
+   one — and, for a series, until it also has an end date that is not before
+   the event it repeats from. */
 function validate(){
   const filled = $('p-title').value.trim() && dateISO()
               && validTime($('p-start').value) && validTime($('p-end').value);
-  $('b-create').disabled = !filled;
+  const series = !repeatsWeekly() || weekCount(dateISO(), untilISO()) >= 1;
+  $('b-create').disabled = !(filled && series);
 
   const flagEnd = !!state.event.needsEnd && !$('p-end').value;
   $('need-end').hidden = !flagEnd;
   $('end-field').classList.toggle('needs', flagEnd);
 
-  $('create-label').textContent =
-    state.mode === 'update' && state.match ? 'עדכון האירוע' : 'יצירת האירוע';
+  $('create-label').textContent = createLabel();
 }
 
 async function submit(){
   const upd = state.mode === 'update' && !!state.match;
+  const weekly = repeatsWeekly();
   const ev = {
     title:    fieldValue('title'),
     date:     fieldValue('date'),
@@ -1406,7 +1684,9 @@ async function submit(){
     location: fieldValue('location'),
     needsEnd:   false,
     needsTitle: false,
-    note: (state.event && state.event.note) || ''
+    note: (state.event && state.event.note) || '',
+    repeat:      weekly ? 'weekly' : 'none',
+    repeatUntil: weekly ? untilISO() : ''
   };
   const payload = upd
     ? { secret:state.secret, action:'update', user:state.user,
@@ -1414,18 +1694,29 @@ async function submit(){
     : { secret:state.secret, action:'create', user:state.user, event:ev };
 
   say('prop-msg', '', 'err');
-  busy('b-create', 'create-spin', 'create-label', true, upd ? 'מעדכן…' : 'יוצר…');
+  busy('b-create', 'create-spin', 'create-label', true,
+       upd ? 'מעדכן…' : weekly ? 'יוצר סדרה…' : 'יוצר…');
   try {
     const r = await api(payload, T_TEXT);
     if (!r.ok){ failedWith(r.error, 'prop-msg'); return; }  // proposal stays intact
-    $('d-head').textContent  = upd ? 'האירוע עודכן' : 'האירוע נוצר';
-    $('d-title').textContent = ev.title;
-    $('d-when').textContent  = r.when || whenText(ev);
-    show('done');
+
+    state.created.push({
+      title: ev.title,
+      when:  r.when || whenText(ev),
+      updated: upd,
+      /* an older backend ignores `repeat` and makes one event; reporting a
+         series it did not create would be a lie, so this follows the reply */
+      count: r.repeat === 'weekly' ? (r.count || 0) : 0
+    });
+    state.outcomes[state.bi] = 'made';
+    /* the queue row should show what was confirmed, not what was parsed */
+    state.batch[state.bi] = Object.assign({}, state.batch[state.bi], ev);
+
+    advance();
   } catch (e){
     say('prop-msg', netMessage(e), 'err');
   } finally {
-    busy('b-create', 'create-spin', 'create-label', false, upd ? 'עדכון האירוע' : 'יצירת האירוע');
+    busy('b-create', 'create-spin', 'create-label', false, createLabel());
   }
 }
 
@@ -1434,10 +1725,20 @@ function reset(){
   detach();
   clearQA();
   state.event = {};
-  state.mode  = 'create';
-  state.match = null;
-  state.alts  = [];
+  state.batch = [];
+  state.bi    = 0;
+  state.outcomes = [];
+  state.created  = [];
+  state.mode   = 'create';
+  state.match  = null;
+  state.alts   = [];
+  state.repeat = 'none';
   state.ambiguous = null;
+  $('p-batch').hidden = true;
+  $('b-skip').hidden  = true;
+  $('repeat-field').hidden = true;
+  $('until-field').hidden  = true;
+  $('p-until').value = '';
   $('dayq').hidden = true;
   clearTimeout(dayView.timer);
   dayView.date = ''; dayView.state = 'idle'; dayView.events = [];
@@ -1508,6 +1809,12 @@ $('i-text').addEventListener('paste', e => {
 });
 
 $('b-create').addEventListener('click', submit);
+$('b-skip').addEventListener('click', skipItem);
+$('b-repeat-off').addEventListener('click',  () => setRepeat('none'));
+$('b-repeat-week').addEventListener('click', () => setRepeat('weekly'));
+
+$('p-until').addEventListener('input', () => { dateInput($('p-until')); stampUntil(); validate(); });
+$('p-until').addEventListener('blur',  () => { dateBlur($('p-until'));  stampUntil(); validate(); });
 $('b-back').addEventListener('click', () => show('input'));   // text + image kept
 $('b-again').addEventListener('click', reset);
 
@@ -1524,7 +1831,7 @@ $('b-tocreate').addEventListener('click', () => {
 
 for (const id of ['p-title','p-date','p-start','p-end','p-loc']){
   $(id).addEventListener('input', () => {
-    if (id === 'p-date'){ dateInput($(id)); stampDate(); loadDaySoon(); }
+    if (id === 'p-date'){ dateInput($(id)); stampDate(); stampUntil(); loadDaySoon(); }
     if (id === 'p-start' || id === 'p-end'){ timeInput($(id)); renderDay(); }
     if (id === 'p-title') renderPeople();   // typing a name lights its chip
     markChanges();
@@ -1534,7 +1841,7 @@ for (const id of ['p-title','p-date','p-start','p-end','p-loc']){
 
 for (const id of ['p-start','p-end','p-date']){
   $(id).addEventListener('blur', () => {
-    if (id === 'p-date'){ dateBlur($(id)); loadDay(false); }
+    if (id === 'p-date'){ dateBlur($(id)); stampUntil(); loadDay(false); }
     else { timeBlur($(id)); renderDay(); }
     markChanges();
     validate();

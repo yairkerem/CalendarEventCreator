@@ -510,6 +510,7 @@ button{font:inherit;cursor:pointer}
   <div class="field">
     <label for="p-loc">מיקום <span class="chg" id="chg-location" hidden>שונה</span></label>
     <input id="p-loc" type="text" dir="auto">
+    <p id="need-loc" class="hint" hidden>המיקום נקרא מהתמונה — כדאי לוודא את האיות.</p>
   </div>
 
   <!-- Weekly series. Offered on new events only: an edit always touches the
@@ -606,7 +607,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 15;
+const APP_VERSION = 17;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -635,7 +636,9 @@ const BG_Q      = 0.72;
 
 const T_PING  = 20000;
 const T_TEXT  = 45000;
-const T_IMAGE = 90000;    // image parses are slow; never cut them off early
+/* Image parses are slow and must never be cut off early: they go to a stronger
+   model that thinks before answering, so this is well past what one takes. */
+const T_IMAGE = 150000;
 const T_DAY   = 20000;
 
 const HE_DAYS = ['יום ראשון','יום שני','יום שלישי','יום רביעי','יום חמישי','יום שישי','שבת'];
@@ -1395,6 +1398,11 @@ function applyMode(){
   $('need-title').hidden = !state.event.needsTitle;
   $('p-title').classList.toggle('suggest', !!state.event.needsTitle);
 
+  /* A place name read off a photo can come back with a letter swapped and
+     nothing to check it against, so it is marked as read rather than known. */
+  $('need-loc').hidden = !state.event.needsLocation;
+  $('p-loc').classList.toggle('suggest', !!state.event.needsLocation);
+
   /* An edit is always one occurrence, so the series controls stay out of it. */
   $('repeat-field').hidden = upd;
   state.repeat = (!upd && src.repeat === 'weekly') ? 'weekly' : 'none';
@@ -1911,6 +1919,7 @@ async function submit(){
     location: fieldValue('location'),
     needsEnd:   false,
     needsTitle: false,
+    needsLocation: false,
     note: (state.event && state.event.note) || '',
     repeat:      weekly ? 'weekly' : 'none',
     repeatUntil: weekly ? untilISO() : ''

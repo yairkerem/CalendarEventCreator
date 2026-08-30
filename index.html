@@ -703,7 +703,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 20;
+const APP_VERSION = 21;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1226,9 +1226,10 @@ const HE_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','�
                    'יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
 const ROW = 44;        // must match .wheel button height in the CSS
-const DAY_SPAN = 60;   // days held either side of the selection
+const DAY_SPAN  = 60;   // days held either side of the selection in each strip
+const WEEK_SPAN = 21;
 
-const sheet = { target:null, y:0, m:0, d:0, strip:[], years:[] };
+const sheet = { target:null, y:0, m:0, d:0, strip:[], week:[], years:[] };
 
 function daysInMonth(y, m){ return new Date(y, m + 1, 0).getDate(); }
 
@@ -1252,8 +1253,23 @@ function indexAt(box, count){
    muting them, the settle handler wakes up part-way through the animation,
    reads whatever row is passing, and commits it — so the column fights the
    very move that started it. Every programmatic scroll goes through here. */
+/* Detaching the handler is not enough to make a column safe to rebuild: a
+   settle already queued by the old one still fires, and it lands on the new
+   contents holding an index that meant something else. Everything in flight
+   has to go with it. */
+function hushWheel(box){
+  box.onscroll = null;
+  clearTimeout(box._t);
+  clearTimeout(box._q);
+  box._quiet = false;
+}
+
 function quietScroll(box, move){
   box._quiet = true;
+  /* A settle already queued describes where the column was a moment ago. It
+     has to go, or it lands mid-move and commits the row being scrolled away
+     from — which is how "go to 1 September" came back as 1 August. */
+  clearTimeout(box._t);
   clearTimeout(box._q);
   move();
   box._q = setTimeout(() => { box._quiet = false; }, 450);
@@ -1268,7 +1284,7 @@ function markWheel(box, index){
 /** Fills one column, centres it on `index`, and reports where it settles. */
 function fillWheel(id, labels, index, onSettle){
   const box = $(id);
-  box.onscroll = null;               // rebuilding must not fire the old handler
+  hushWheel(box);
   box.textContent = '';
   box._i = -1;
 
@@ -1298,7 +1314,8 @@ function fillWheel(id, labels, index, onSettle){
     markWheel(box, indexAt(box, labels.length));    // the highlight tracks the finger
     clearTimeout(box._t);
     /* scroll fires continuously; only where it comes to rest is a decision */
-    box._t = setTimeout(() => onSettle(indexAt(box, labels.length)), 90);
+    /* re-checked here too: the mute can arrive while this is already queued */
+    box._t = setTimeout(() => { if (!box._quiet) onSettle(indexAt(box, labels.length)); }, 90);
   };
 }
 
@@ -1354,26 +1371,17 @@ function goTo(iso){
     if (years.length !== sheet.years.length) buildYear();     // rolled past the ends
     else scrollWheel('wheel-year', years.indexOf(sheet.y));
   }
-  buildDay();
+  refresh();
 }
 
-function onDayPick(i){ goTo(sheet.strip[i]); }
-
-/* The week strip moves within the week the date is already in — never further
-   than six days — so it reads as "which day of this week", and the wheels
-   below stay in charge of which week that is. */
-function onWeekPick(i){
-  const cur = weekdayOf(sheetISO());
-  if (i === cur) return;
-  goTo(plusDaysISO(sheetISO(), i - cur));
-}
+function onDayPick(i){  goTo(sheet.strip[i]); }
+function onWeekPick(i){ goTo(sheet.week[i]);  }
 
 function onMonthPick(i){
   if (i === sheet.m) return;
   sheet.m = i;
   clampDay();
-  readSheet();
-  buildDay();
+  refresh();
 }
 
 function onYearPick(i){
@@ -1381,8 +1389,7 @@ function onYearPick(i){
   if (!y || y === sheet.y) return;
   sheet.y = y;
   clampDay();
-  readSheet();
-  buildDay();
+  refresh();
 }
 
 function weekdayOf(iso){
@@ -1406,55 +1413,61 @@ function nearestIndex(strip){
   return best;
 }
 
-/** Rewrites the dates on the week strip and marks the day in question. */
-function paintWeek(){
-  const rows = $('weekstrip').querySelectorAll('button');
-  if (!rows.length) return;
-  const iso = sheetISO();
-  const cur = weekdayOf(iso);
-  const sunday = plusDaysISO(iso, -cur);
-  rows.forEach((b, i) => {
-    b.querySelector('span').textContent = String(+plusDaysISO(sunday, i).slice(8, 10));
-    b.classList.toggle('on', i === cur);
-  });
-  quietScroll($('weekstrip'), () =>
-    rows[cur].scrollIntoView({ inline:'center', block:'nearest', behavior:'smooth' }));
-}
-
+/* Like the day column, and for the same reason: a strip that stopped at
+   Saturday would be a wall in the middle of a scroll. It runs on into the next
+   week — Saturday, then Sunday — and is rebuilt around wherever it lands. */
 function buildWeek(){
   const strip = $('weekstrip');
-  strip.onscroll = null;
+  hushWheel(strip);
   strip.textContent = '';
+
+  const centre = sheetISO();
+  sheet.week = [];
+  for (let i = -WEEK_SPAN; i <= WEEK_SPAN; i++) sheet.week.push(plusDaysISO(centre, i));
 
   const pad = () => { const p = document.createElement('div'); p.className = 'pad'; return p; };
   strip.append(pad());
-  HE_SHORT.forEach((label, i) => {
+  sheet.week.forEach((iso, i) => {
     const b = document.createElement('button');
     b.type = 'button';
     const name = document.createElement('b');
-    name.textContent = label;
+    name.textContent = HE_SHORT[weekdayOf(iso)];
     const num = document.createElement('span');
+    num.textContent = String(+iso.slice(8, 10));
     b.append(name, num);
-    b.addEventListener('click', () => onWeekPick(i));
+    b.classList.toggle('on', i === WEEK_SPAN);
+    b.addEventListener('click', () => {
+      quietScroll(strip, () => b.scrollIntoView({ inline:'center', block:'nearest', behavior:'smooth' }));
+      onWeekPick(i);
+    });
     strip.append(b);
   });
   strip.append(pad());
 
-  paintWeek();
+  /* centring is scrollIntoView rather than scrollLeft: RTL makes the sign of
+     scrollLeft a cross-browser argument, and this reads the same either way */
+  quietScroll(strip, () => strip.querySelectorAll('button')[WEEK_SPAN]
+    .scrollIntoView({ inline:'center', block:'nearest', behavior:'auto' }));
 
   strip.onscroll = () => {
     if (strip._quiet) return;
     const i = nearestIndex(strip);
     strip.querySelectorAll('button').forEach((b, k) => b.classList.toggle('on', k === i));
     clearTimeout(strip._t);
-    strip._t = setTimeout(() => onWeekPick(i), 90);
+    strip._t = setTimeout(() => { if (!strip._quiet) onWeekPick(nearestIndex(strip)); }, 90);
   };
 }
 
 /* The weekday is the thing people actually check a date against. */
 function readSheet(){
   $('datesheet-read').textContent = heDate(sheetISO());
-  paintWeek();
+}
+
+/* Both strips are rebuilt around wherever the date landed. */
+function refresh(){
+  readSheet();
+  buildWeek();
+  buildDay();
 }
 
 function openDateSheet(targetId, title){

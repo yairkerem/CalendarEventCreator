@@ -109,6 +109,84 @@ body.adjusting.has-bg::after{background:transparent}
 .bgadjust .panel .btn{margin-bottom:8px}
 .bgadjust .panel .btn:last-child{margin-bottom:0}
 
+/* ---- date wheels ---------------------------------------------- */
+/* Three independent scrollers, one per part of the date. Each column is a
+   plain scroll container with snap points, so the phone's own inertia does the
+   spinning and there is no drag maths to get wrong. The selected value is
+   whichever item is centred, read back from scrollTop after scrolling stops. */
+.sheet{
+  position:fixed; inset:0; z-index:50;
+  background:color-mix(in srgb, var(--text) 45%, transparent);
+  display:flex; flex-direction:column; justify-content:flex-end;
+  padding:max(14px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right))
+          max(20px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));
+}
+.sheet .panel{
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius); padding:14px; box-shadow:var(--shadow);
+  max-width:560px; width:100%; margin:0 auto;
+}
+.sheet h2{font-size:1.05rem;margin:0 0 2px;text-align:center}
+.sheet .read{margin:0 0 12px;text-align:center;color:var(--muted);font-size:.9rem;
+  min-height:1.2em}
+
+/* The week the chosen date sits in, scrolling sideways. Same idea as the
+   wheels turned on its side, except the label carries the date too, so the
+   whole week is readable at a glance. */
+.weekrow{position:relative;margin:0 0 14px}
+/* Physical left/transform on purpose: the band marks the geometric middle,
+   which is the same place in both directions — the logical inset-inline
+   properties flip it under RTL and leave it off by half a column. */
+.weekrow::before{
+  content:''; position:absolute; top:0; bottom:0; left:50%;
+  width:56px; transform:translateX(-50%); pointer-events:none;
+  background:var(--surface-2); border-radius:10px;
+}
+.weekrow .strip{
+  position:relative; z-index:1;
+  display:flex; overflow-x:auto; overscroll-behavior-x:contain;
+  scroll-snap-type:x mandatory; scrollbar-width:none;
+}
+.weekrow .strip::-webkit-scrollbar{display:none}
+.weekrow button{
+  flex:0 0 56px; height:52px; scroll-snap-align:center;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
+  background:none; border:0; padding:0; color:var(--muted);
+}
+.weekrow button b{font-size:.8rem;font-weight:600}
+.weekrow button span{font-size:1rem;font-variant-numeric:tabular-nums}
+.weekrow button.on{color:var(--text)}
+.weekrow button.on span{font-weight:700}
+/* half the strip minus half an item, so the first and last can reach centre */
+.weekrow .pad{flex:0 0 calc(50% - 28px)}
+
+.wheels{position:relative;display:flex;gap:8px;margin:0 0 14px}
+/* the band that marks which row counts as chosen */
+.wheels::before{
+  content:''; position:absolute; inset-inline:0; top:50%; height:44px;
+  transform:translateY(-50%); pointer-events:none;
+  background:var(--surface-2); border-radius:10px;
+}
+.wheel{
+  flex:1; min-width:0; position:relative; z-index:1;
+  height:220px; overflow-y:auto; overscroll-behavior:contain;
+  scroll-snap-type:y mandatory;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:none;
+}
+.wheel::-webkit-scrollbar{display:none}
+.wheel button{
+  display:flex; align-items:center; justify-content:center;
+  width:100%; height:44px; scroll-snap-align:center;
+  background:none; border:0; padding:0;
+  color:var(--muted); font-size:1rem; font-variant-numeric:tabular-nums;
+}
+.wheel button.on{color:var(--text);font-weight:600;font-size:1.1rem}
+/* half the wheel's height, so the first and last item can reach the centre */
+.wheel .pad{height:88px;flex:none}
+.sheet .panel .btn{margin-bottom:8px}
+.sheet .panel .btn:last-child{margin-bottom:0}
+
 main{max-width:560px;margin:0 auto;position:relative}
 h1{font-size:1.45rem;margin:.2em 0 .3em}
 h2{font-size:1.25rem;margin:.2em 0 .6em}
@@ -483,8 +561,8 @@ button{font:inherit;cursor:pointer}
 
   <div class="field">
     <label for="p-date">תאריך <span class="chg" id="chg-date" hidden>שונה</span></label>
-    <input id="p-date" class="date" type="text" inputmode="numeric" maxlength="10"
-           placeholder="DD/MM/YYYY" autocomplete="off" enterkeyhint="next">
+    <input id="p-date" class="date" type="text" readonly inputmode="none"
+           placeholder="DD/MM/YYYY" autocomplete="off">
     <p id="p-datelabel" class="datelabel"></p>
   </div>
 
@@ -525,8 +603,8 @@ button{font:inherit;cursor:pointer}
 
   <div class="field" id="until-field" hidden>
     <label for="p-until">חוזר עד</label>
-    <input id="p-until" class="date" type="text" inputmode="numeric" maxlength="10"
-           placeholder="DD/MM/YYYY" autocomplete="off" enterkeyhint="done">
+    <input id="p-until" class="date" type="text" readonly inputmode="none"
+           placeholder="DD/MM/YYYY" autocomplete="off">
     <p id="p-untillabel" class="datelabel"></p>
   </div>
 
@@ -587,6 +665,24 @@ button{font:inherit;cursor:pointer}
 </div>
 
 <!-- full-screen drag surface; outside <main> so it survives main being hidden -->
+<!-- one picker, shared by the event date and the series end date -->
+<div id="datesheet" class="sheet" hidden>
+  <div class="panel">
+    <h2 id="datesheet-title">תאריך</h2>
+    <p class="read" id="datesheet-read"></p>
+    <div class="weekrow">
+      <div class="strip" id="weekstrip" aria-label="יום בשבוע"></div>
+    </div>
+    <div class="wheels">
+      <div class="wheel" id="wheel-day"   aria-label="יום"></div>
+      <div class="wheel" id="wheel-month" aria-label="חודש"></div>
+      <div class="wheel" id="wheel-year"  aria-label="שנה"></div>
+    </div>
+    <button type="button" id="b-date-ok" class="btn">אישור</button>
+    <button type="button" id="b-date-cancel" class="btn secondary">ביטול</button>
+  </div>
+</div>
+
 <div id="bg-adjust" class="bgadjust" hidden>
   <div class="panel">
     <p id="bg-adjust-hint">גררו את התמונה כדי לבחור את החלק שיוצג</p>
@@ -607,7 +703,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 17;
+const APP_VERSION = 20;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1114,6 +1210,280 @@ function heDate(iso){
 function whenText(ev){
   const time = [ev.start, ev.end].filter(Boolean).join('–');
   return [heDate(ev.date), time].filter(Boolean).join(' · ');
+}
+
+/* ---- the date wheels ------------------------------------------- */
+/* Nudging a date by one day used to mean typing eight digits. Each part now
+   scrolls on its own, and the field it writes into keeps holding DD/MM/YYYY —
+   so everything downstream (dateISO, the day view, the change badges) carries
+   on reading exactly what it always read.
+
+   The day column is not a 1..31 list but a rolling strip of real dates. Past
+   the end of a month it simply keeps going: the month wheel follows it, and
+   the year follows at the turn of December. After every move the strip is
+   rebuilt around wherever it landed, so there is always runway both ways. */
+const HE_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני',
+                   'יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+
+const ROW = 44;        // must match .wheel button height in the CSS
+const DAY_SPAN = 60;   // days held either side of the selection
+
+const sheet = { target:null, y:0, m:0, d:0, strip:[], years:[] };
+
+function daysInMonth(y, m){ return new Date(y, m + 1, 0).getDate(); }
+
+function sheetISO(){
+  const p = x => String(x).padStart(2, '0');
+  return sheet.y + '-' + p(sheet.m + 1) + '-' + p(sheet.d);
+}
+
+/** Today, as ISO — the fallback when the field is empty. */
+function todayISO(){
+  const n = new Date();
+  const p = x => String(x).padStart(2, '0');
+  return n.getFullYear() + '-' + p(n.getMonth() + 1) + '-' + p(n.getDate());
+}
+
+function indexAt(box, count){
+  return Math.max(0, Math.min(count - 1, Math.round(box.scrollTop / ROW)));
+}
+
+/* A scroll we start ourselves fires exactly the events a finger does. Without
+   muting them, the settle handler wakes up part-way through the animation,
+   reads whatever row is passing, and commits it — so the column fights the
+   very move that started it. Every programmatic scroll goes through here. */
+function quietScroll(box, move){
+  box._quiet = true;
+  clearTimeout(box._q);
+  move();
+  box._q = setTimeout(() => { box._quiet = false; }, 450);
+}
+
+function markWheel(box, index){
+  if (box._i === index) return;      // scroll fires far more often than the row changes
+  box._i = index;
+  box.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === index));
+}
+
+/** Fills one column, centres it on `index`, and reports where it settles. */
+function fillWheel(id, labels, index, onSettle){
+  const box = $(id);
+  box.onscroll = null;               // rebuilding must not fire the old handler
+  box.textContent = '';
+  box._i = -1;
+
+  const pad = () => { const p = document.createElement('div'); p.className = 'pad'; return p; };
+  box.append(pad());
+  labels.forEach((label, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    /* tapping a row beats scrolling to it when it is already in view. The
+       choice is taken at once and the animation just catches up, rather than
+       being read back out of a moving column. */
+    b.addEventListener('click', () => {
+      quietScroll(box, () => box.scrollTo({ top: i * ROW, behavior:'smooth' }));
+      markWheel(box, i);
+      onSettle(i);
+    });
+    box.append(b);
+  });
+  box.append(pad());
+
+  box.scrollTop = index * ROW;      // before the handler exists, so it is silent
+  markWheel(box, index);
+
+  box.onscroll = () => {
+    if (box._quiet) return;
+    markWheel(box, indexAt(box, labels.length));    // the highlight tracks the finger
+    clearTimeout(box._t);
+    /* scroll fires continuously; only where it comes to rest is a decision */
+    box._t = setTimeout(() => onSettle(indexAt(box, labels.length)), 90);
+  };
+}
+
+function scrollWheel(id, index){
+  const box = $(id);
+  quietScroll(box, () => box.scrollTo({ top: index * ROW, behavior:'smooth' }));
+  markWheel(box, index);
+}
+
+/* Last year through two ahead, always widened to contain whatever the day
+   strip has rolled us into. */
+function yearList(){
+  const now = new Date().getFullYear();
+  const out = [];
+  for (let y = Math.min(now - 1, sheet.y); y <= Math.max(now + 2, sheet.y); y++) out.push(y);
+  return out;
+}
+
+function clampDay(){
+  const max = daysInMonth(sheet.y, sheet.m);
+  if (sheet.d > max) sheet.d = max;
+}
+
+function buildDay(){
+  const centre = sheetISO();
+  sheet.strip = [];
+  for (let i = -DAY_SPAN; i <= DAY_SPAN; i++) sheet.strip.push(plusDaysISO(centre, i));
+  fillWheel('wheel-day', sheet.strip.map(iso => String(+iso.slice(8, 10))), DAY_SPAN, onDayPick);
+}
+
+function buildMonth(){ fillWheel('wheel-month', HE_MONTHS, sheet.m, onMonthPick); }
+
+function buildYear(){
+  sheet.years = yearList();
+  fillWheel('wheel-year', sheet.years.map(String), sheet.years.indexOf(sheet.y), onYearPick);
+}
+
+/* Every scroller ends up here: move to a date, and let the other columns
+   catch up. Returns early when nothing moved, which is what stops re-centring
+   from feeding itself — rebuilding a column sets its scroll position, which
+   fires scroll, which settles on the row it was already on. */
+function goTo(iso){
+  if (!iso || iso === sheetISO()) return;
+
+  const p = iso.split('-').map(Number);
+  const rolled = p[0] !== sheet.y || p[1] - 1 !== sheet.m;
+  sheet.y = p[0]; sheet.m = p[1] - 1; sheet.d = p[2];
+  readSheet();
+
+  if (rolled){
+    scrollWheel('wheel-month', sheet.m);
+    const years = yearList();
+    if (years.length !== sheet.years.length) buildYear();     // rolled past the ends
+    else scrollWheel('wheel-year', years.indexOf(sheet.y));
+  }
+  buildDay();
+}
+
+function onDayPick(i){ goTo(sheet.strip[i]); }
+
+/* The week strip moves within the week the date is already in — never further
+   than six days — so it reads as "which day of this week", and the wheels
+   below stay in charge of which week that is. */
+function onWeekPick(i){
+  const cur = weekdayOf(sheetISO());
+  if (i === cur) return;
+  goTo(plusDaysISO(sheetISO(), i - cur));
+}
+
+function onMonthPick(i){
+  if (i === sheet.m) return;
+  sheet.m = i;
+  clampDay();
+  readSheet();
+  buildDay();
+}
+
+function onYearPick(i){
+  const y = sheet.years[i];
+  if (!y || y === sheet.y) return;
+  sheet.y = y;
+  clampDay();
+  readSheet();
+  buildDay();
+}
+
+function weekdayOf(iso){
+  const p = iso.split('-').map(Number);
+  return new Date(p[0], p[1] - 1, p[2]).getDay();
+}
+
+/* RTL turns scrollLeft into a cross-browser argument, so the week strip never
+   reads it: the chosen item is whichever one is nearest the middle, measured,
+   and moving to one is scrollIntoView. Both work the same in either
+   direction. */
+function nearestIndex(strip){
+  const box = strip.getBoundingClientRect();
+  const mid = box.left + box.width / 2;
+  let best = 0, bestGap = Infinity;
+  strip.querySelectorAll('button').forEach((b, i) => {
+    const r = b.getBoundingClientRect();
+    const gap = Math.abs(r.left + r.width / 2 - mid);
+    if (gap < bestGap){ bestGap = gap; best = i; }
+  });
+  return best;
+}
+
+/** Rewrites the dates on the week strip and marks the day in question. */
+function paintWeek(){
+  const rows = $('weekstrip').querySelectorAll('button');
+  if (!rows.length) return;
+  const iso = sheetISO();
+  const cur = weekdayOf(iso);
+  const sunday = plusDaysISO(iso, -cur);
+  rows.forEach((b, i) => {
+    b.querySelector('span').textContent = String(+plusDaysISO(sunday, i).slice(8, 10));
+    b.classList.toggle('on', i === cur);
+  });
+  quietScroll($('weekstrip'), () =>
+    rows[cur].scrollIntoView({ inline:'center', block:'nearest', behavior:'smooth' }));
+}
+
+function buildWeek(){
+  const strip = $('weekstrip');
+  strip.onscroll = null;
+  strip.textContent = '';
+
+  const pad = () => { const p = document.createElement('div'); p.className = 'pad'; return p; };
+  strip.append(pad());
+  HE_SHORT.forEach((label, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    const name = document.createElement('b');
+    name.textContent = label;
+    const num = document.createElement('span');
+    b.append(name, num);
+    b.addEventListener('click', () => onWeekPick(i));
+    strip.append(b);
+  });
+  strip.append(pad());
+
+  paintWeek();
+
+  strip.onscroll = () => {
+    if (strip._quiet) return;
+    const i = nearestIndex(strip);
+    strip.querySelectorAll('button').forEach((b, k) => b.classList.toggle('on', k === i));
+    clearTimeout(strip._t);
+    strip._t = setTimeout(() => onWeekPick(i), 90);
+  };
+}
+
+/* The weekday is the thing people actually check a date against. */
+function readSheet(){
+  $('datesheet-read').textContent = heDate(sheetISO());
+  paintWeek();
+}
+
+function openDateSheet(targetId, title){
+  const iso = dateISOof($(targetId)) || dateISO() || todayISO();
+  const p = iso.split('-').map(Number);
+
+  sheet.target = targetId;
+  sheet.y = p[0]; sheet.m = p[1] - 1; sheet.d = p[2];
+
+  $('datesheet-title').textContent = title;
+  $('datesheet').hidden = false;
+
+  buildWeek(); buildDay(); buildMonth(); buildYear();
+  readSheet();
+}
+
+function closeDateSheet(keep){
+  if (keep && sheet.target){
+    const el = $(sheet.target);
+    el.value = dateShow(sheetISO());
+    el.classList.remove('bad');
+    if (sheet.target === 'p-date'){
+      stampDate(); stampUntil(); markChanges(); validate(); loadDay(false);
+    } else {
+      stampUntil(); validate();
+    }
+  }
+  sheet.target = null;
+  $('datesheet').hidden = true;
 }
 
 /* ---- DD/MM/YYYY date field ------------------------------------ */
@@ -2050,6 +2420,15 @@ $('i-text').addEventListener('paste', e => {
 
 $('b-create').addEventListener('click', submit);
 $('b-skip').addEventListener('click', skipItem);
+/* The fields are readonly and raise no keyboard; they are the button that
+   opens the wheels. */
+$('p-date').addEventListener('click',  () => openDateSheet('p-date',  'תאריך האירוע'));
+$('p-until').addEventListener('click', () => openDateSheet('p-until', 'חוזר עד'));
+$('b-date-ok').addEventListener('click',     () => closeDateSheet(true));
+$('b-date-cancel').addEventListener('click', () => closeDateSheet(false));
+/* tapping the dimmed area outside the panel is a cancel, as it looks like one */
+$('datesheet').addEventListener('click', e => { if (e.target === $('datesheet')) closeDateSheet(false); });
+
 $('b-amend').addEventListener('click', amend);
 $('i-amend').addEventListener('keydown', e => { if (e.key === 'Enter') amend(); });
 $('b-repeat-off').addEventListener('click',  () => setRepeat('none'));

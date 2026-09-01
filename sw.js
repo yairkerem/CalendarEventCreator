@@ -7,14 +7,14 @@
  * cross-origin POST, and the guard in fetch() below only ever handles
  * same-origin GETs. Responses from the backend never enter the cache.
  */
-const CACHE_VERSION = 'v23';
+const CACHE_VERSION = 'v24';
 const CACHE = 'event-creator-shell-' + CACHE_VERSION;
 
 /* Where a share from another app is parked between the POST that delivers it
  * and the page that picks it up. Kept out of CACHE so that clearing the shell
  * on an update cannot throw away a photo mid-hand-off. */
 const SHARE_CACHE = 'event-creator-share';
-const SHARE_FILE  = './__shared-image';
+const SHARE_FILE  = './__shared-file';
 const SHARE_TEXT  = './__shared-text';
 
 const SHELL = [
@@ -58,10 +58,15 @@ async function receiveShare(request){
     const form = await request.formData();
     const cache = await caches.open(SHARE_CACHE);
 
-    const file = form.get('image');
+    const file = form.get('file') || form.get('image');
     if (file && file.size){
+      /* A cached body comes back as a nameless blob, so the filename rides
+         along in a header — it is all the page can show for a PDF. */
       await cache.put(SHARE_FILE, new Response(file, {
-        headers: { 'Content-Type': file.type || 'image/jpeg' }
+        headers: {
+          'Content-Type': file.type || 'image/jpeg',
+          'X-Shared-Name': encodeURIComponent(file.name || '')
+        }
       }));
     }
 

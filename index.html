@@ -376,6 +376,17 @@ button{font:inherit;cursor:pointer}
   display:block;max-height:132px;max-width:100%;
   border-radius:12px;border:1px solid var(--border);
 }
+.thumb .doc{
+  display:flex;align-items:center;gap:10px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;padding:12px 14px;max-width:100%;
+}
+.thumb .doc .ico{font-size:1.7rem;line-height:1}
+.thumb .doc .meta{min-width:0;display:flex;flex-direction:column;gap:2px}
+.thumb .doc b{font-size:.92rem;font-weight:600;overflow-wrap:anywhere}
+/* "2.4 MB" is one LTR run: in an RTL paragraph the unit ends up before the
+   number unless the span says otherwise. */
+.thumb .doc .meta span{font-size:.8rem;color:var(--muted);direction:ltr;text-align:start}
 .thumb button{
   position:absolute;inset-block-start:-10px;inset-inline-end:-10px;
   width:34px;height:34px;border-radius:50%;
@@ -487,19 +498,24 @@ button{font:inherit;cursor:pointer}
   </div>
 
   <div class="attach">
-    <button type="button" id="b-pick" class="chip icon" aria-label="צירוף תמונה" title="צירוף תמונה">📎</button>
+    <button type="button" id="b-pick" class="chip icon" aria-label="צירוף קובץ" title="צירוף תמונה או PDF">📎</button>
     <button type="button" id="b-cam" class="chip icon" aria-label="צילום" title="צילום">📷</button>
     <!-- shown only where the browser can actually listen -->
     <button type="button" id="b-mic" class="chip icon" aria-label="הקלטה" title="הקלטה" hidden>🎤</button>
   </div>
   <!-- no `capture` on the first input: the OS picker then offers camera *and*
        gallery. The second input is the explicit one-tap camera path. -->
-  <input id="f-pick" type="file" accept="image/*" hidden>
+  <input id="f-pick" type="file" accept="image/*,application/pdf" hidden>
   <input id="f-cam"  type="file" accept="image/*" capture="environment" hidden>
 
   <div id="thumb" class="thumb" hidden>
-    <img id="thumb-img" alt="התמונה המצורפת">
-    <button type="button" id="b-unthumb" aria-label="הסרת התמונה">×</button>
+    <img id="thumb-img" alt="התמונה המצורפת" hidden>
+    <!-- a PDF has no picture to show, so it gets a card instead -->
+    <div id="thumb-doc" class="doc" hidden>
+      <span class="ico">📄</span>
+      <span class="meta"><b id="doc-name" dir="auto"></b><span id="doc-size"></span></span>
+    </div>
+    <button type="button" id="b-unthumb" aria-label="הסרת הקובץ">×</button>
   </div>
 
   <!-- shown only when the model needs one more detail before it can build the
@@ -719,7 +735,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 23;
+const APP_VERSION = 24;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -732,7 +748,7 @@ const LS_PEOPLE_SRC = 'fc.people.src';
 
 /* Must match sw.js — the two halves of the share hand-off. */
 const SHARE_CACHE = 'event-creator-share';
-const SHARE_FILE  = './__shared-image';
+const SHARE_FILE  = './__shared-file';
 const SHARE_TEXT  = './__shared-text';
 
 const LS_BG     = 'fc.bg';
@@ -939,25 +955,83 @@ async function shrink(file, maxEdge, quality){
   return canvas.toDataURL('image/jpeg', quality);
 }
 
-async function attach(file){
+/** Base64 of a file as-is, no re-encoding — for anything that is not a photo. */
+function toBase64(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload  = () => { const s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
+    r.onerror = () => reject(new Error('read'));
+    r.readAsDataURL(file);
+  });
+}
+
+/* A scan from Adobe Scan and friends arrives as a PDF. It cannot be drawn into
+   a canvas, so it is neither downscaled nor previewed — it goes up whole, and
+   the backend hands it to the model as a document rather than a picture. That
+   makes size the thing to watch, where a photo has its longest edge capped. */
+const MAX_PDF = 8 * 1024 * 1024;
+
+function fileSize(bytes){
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return Math.round(bytes / 1024) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+/**
+ * @param {Blob}    file
+ * @param {string=} nameHint  a shared file arrives as a nameless blob, so the
+ *                            name travels separately from the service worker
+ */
+async function attach(file, nameHint){
   if (!file) return;
-  if (!/^image\//.test(file.type)){
-    say('input-msg', 'אפשר לצרף תמונות בלבד.', 'err');
+
+  const name = file.name || nameHint || '';
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(name);
+  if (!isPdf && !/^image\//.test(file.type)){
+    say('input-msg', 'אפשר לצרף תמונה או קובץ PDF.', 'err');
     return;
   }
+
   try {
-    const url = await shrink(file, MAX_EDGE, JPEG_Q);
-    state.image = {
-      mediaType: 'image/jpeg',
-      data: url.slice(url.indexOf(',') + 1),   // raw base64, no data: prefix
-      preview: url
-    };
-    $('thumb-img').src = url;
-    $('thumb').hidden = false;
+    if (isPdf){
+      if (file.size > MAX_PDF){
+        say('input-msg', 'הקובץ גדול מדי (מעל 8MB). נסו לסרוק בפחות עמודים.', 'err');
+        return;
+      }
+      state.file = { mediaType:'application/pdf', data: await toBase64(file), preview:null };
+      showAttachment(name || 'סריקה', file.size);
+    } else {
+      const url = await shrink(file, MAX_EDGE, JPEG_Q);
+      state.file = {
+        mediaType: 'image/jpeg',
+        data: url.slice(url.indexOf(',') + 1),   // raw base64, no data: prefix
+        preview: url
+      };
+      showAttachment('', 0, url);
+    }
     say('input-msg', '', 'err');
   } catch {
-    say('input-msg', 'לא הצלחתי לקרוא את התמונה. נסו קובץ אחר.', 'err');
+    say('input-msg', 'לא הצלחתי לקרוא את הקובץ. נסו קובץ אחר.', 'err');
   }
+}
+
+/** A picture shows itself; a PDF gets a card with its name and size. */
+function showAttachment(name, size, previewUrl){
+  const img  = $('thumb-img');
+  const card = $('thumb-doc');
+  if (previewUrl){
+    img.src = previewUrl;
+    img.hidden = false;
+    card.hidden = true;
+  } else {
+    img.removeAttribute('src');
+    img.hidden = true;
+    card.hidden = false;
+    $('doc-name').textContent = name;
+    $("doc-size").textContent = fileSize(size);
+  }
+  $('thumb').hidden = false;
 }
 
 /* ---- the message box grows with the message -------------------- */
@@ -1055,7 +1129,7 @@ function toggleVoice(){
    whatever is waiting, hands it to the ordinary attach path, and clears it so
    the same photo cannot arrive twice. */
 async function takeShared(){
-  const got = { image:false, text:false };
+  const got = { file:'', text:false };      // file is '' | 'image' | 'pdf'
   if (!('caches' in window)) return got;
 
   try {
@@ -1071,10 +1145,12 @@ async function takeShared(){
     const fileRes = await cache.match(SHARE_FILE);
     if (fileRes){
       const blob = await fileRes.blob();
+      let named = '';
+      try { named = decodeURIComponent(fileRes.headers.get('X-Shared-Name') || ''); } catch {}
       await cache.delete(SHARE_FILE);
       if (blob && blob.size){
-        await attach(blob);
-        got.image = !!state.image;
+        await attach(blob, named);
+        if (state.file) got.file = state.file.mediaType === 'application/pdf' ? 'pdf' : 'image';
       }
     }
   } catch {
@@ -1084,9 +1160,10 @@ async function takeShared(){
 }
 
 function sharedMessage(got){
-  if (got.image && got.text) return 'התמונה והטקסט ששיתפתם נקלטו.';
-  if (got.image)             return 'התמונה ששיתפתם צורפה.';
-  if (got.text)              return 'ההודעה ששיתפתם הודבקה.';
+  const what = got.file === 'pdf' ? 'הסריקה' : 'התמונה';
+  if (got.file && got.text) return what + ' והטקסט ששיתפתם נקלטו.';
+  if (got.file)             return what + ' ששיתפתם צורפה.';
+  if (got.text)             return 'ההודעה ששיתפתם הודבקה.';
   return '';
 }
 
@@ -1203,9 +1280,11 @@ function clearBg(){
 }
 
 function detach(){
-  state.image = null;
+  state.file = null;
   $('thumb').hidden = true;
+  $('thumb-img').hidden = true;
   $('thumb-img').removeAttribute('src');
+  $('thumb-doc').hidden = true;
   $('f-pick').value = '';
   $('f-cam').value  = '';
 }
@@ -1215,12 +1294,15 @@ function detach(){
    single question — which is why the original message and every answer since
    travel together as `history`. */
 async function turn(text, withImage, ui){
-  const useImage = withImage && !!state.image;
-  busy(ui.btn, ui.spin, ui.label, true, useImage ? 'קורא את התמונה…' : ui.busy);
+  const useImage = withImage && !!state.file;
+  busy(ui.btn, ui.spin, ui.label, true,
+       !useImage ? ui.busy
+       : state.file.mediaType === 'application/pdf' ? 'קורא את הסריקה…'
+       : 'קורא את התמונה…');
 
   const payload = { secret: state.secret, action: 'parse' };
   if (text) payload.text = text;
-  if (useImage) payload.image = { mediaType: state.image.mediaType, data: state.image.data };
+  if (useImage) payload.file = { mediaType: state.file.mediaType, data: state.file.data };
   if (state.history.length) payload.history = state.history.slice();
 
   try {
@@ -1260,7 +1342,7 @@ const UI_ANSWER = { btn:'b-answer', spin:'answer-spin', label:'answer-label',
 async function parse(){
   stopVoice();                       // whatever was said is in the box by now
   const text = $('i-text').value.trim();
-  if (!text && !state.image){
+  if (!text && !state.file){
     say('input-msg', 'הדביקו הודעה או צרפו תמונה.', 'err');
     return;
   }

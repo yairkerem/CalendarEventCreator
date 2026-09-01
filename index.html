@@ -422,12 +422,15 @@ button{font:inherit;cursor:pointer}
   display:grid;place-items:center;font-size:36px;line-height:1;
 }
 .done .what{font-size:1.2rem;font-weight:600;margin:0 0 6px}
-.done .when{color:var(--muted);margin:0;direction:ltr}
+/* These lines lead with a Hebrew weekday and carry numbers inside, so they
+   take their direction from their own text. Forcing LTR reversed them:
+   "יום חמישי 3.9.2026 16:30–18:00" came out reading 18:00–16:30. */
+.done .when{color:var(--muted);margin:0}
 .madelist{display:flex;flex-direction:column;gap:8px;text-align:start;margin:18px 0 0}
 .madelist .row{display:block;background:var(--surface);border:1px solid var(--border);
   border-radius:10px;padding:10px 12px}
 .madelist b{display:block;font-weight:600;font-size:.95rem;overflow-wrap:anywhere}
-.madelist span{display:block;color:var(--muted);font-size:.85rem;direction:ltr}
+.madelist span{display:block;color:var(--muted);font-size:.85rem}
 </style>
 </head>
 <body>
@@ -689,7 +692,7 @@ button{font:inherit;cursor:pointer}
     <div class="tick">✓</div>
     <p class="lede" id="d-head" style="margin-bottom:8px"></p>
     <p class="what" id="d-title"></p>
-    <p class="when" id="d-when"></p>
+    <p class="when" id="d-when" dir="auto"></p>
     <div class="madelist" id="d-list" hidden></div>
   </div>
   <div class="stack">
@@ -744,7 +747,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 28;
+const APP_VERSION = 30;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1406,9 +1409,16 @@ function heDate(iso){
   return HE_DAYS[dt.getDay()] + ', ' + dt.getDate() + '.' + (dt.getMonth() + 1) + '.' + dt.getFullYear();
 }
 
+/* Unicode isolates. A dash between two times is a neutral character, and in a
+   Hebrew line it takes the paragraph's direction — which lays the two times out
+   right to left, so "16:30–18:00" is read back as 18:00–16:30. Everything
+   between these two marks keeps its own left-to-right order instead. */
+const LRI = '⁦', PDI = '⁩';
+const ltr = s => s ? LRI + s + PDI : s;
+
 function whenText(ev){
   const time = [ev.start, ev.end].filter(Boolean).join('–');
-  return [heDate(ev.date), time].filter(Boolean).join(' · ');
+  return [heDate(ev.date), ltr(time)].filter(Boolean).join(' · ');
 }
 
 /* ---- the date wheels ------------------------------------------- */
@@ -2069,7 +2079,8 @@ function renderDone(){
     row.className = 'row';
     const b = document.createElement('b');
     b.textContent = m.title;
-    const s = document.createElement('span');
+    const s = document.createElement("span");
+    s.dir = "auto";                 // the weekday leads, so let the text decide
     s.textContent = madeWhen(m);
     row.append(b, s);
     box.append(row);

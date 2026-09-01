@@ -216,14 +216,19 @@ input:focus,textarea:focus{
 }
 /* Plain text fields, not <input type=time|date>: those controls render in the
    device's locale, and nothing in HTML or CSS can force 24h or DD/MM/YYYY on a
-   phone set otherwise. Typing is also faster than a picker when the value is
-   being copied out of a message. */
+   phone set otherwise. The date fields are readonly and open the wheels; the
+   time fields are still typed, where digits beat any picker. */
 input.time,input.date{
   direction:ltr; text-align:center; letter-spacing:.08em;
   font-variant-numeric:tabular-nums;
 }
 input.time.bad,input.date.bad{border-color:var(--danger);background:var(--danger-bg)}
-textarea{min-height:150px;resize:vertical;line-height:1.55}
+/* Grows with the message up to twice this height, then scrolls — see
+   growText(). min-height is the single source of that number. */
+textarea{min-height:150px;resize:vertical;line-height:1.55;overflow-y:auto}
+
+/* while the microphone is live */
+.chip.rec{background:var(--danger-bg);border-color:var(--danger-bd);color:var(--danger)}
 
 /* dir=auto picks a direction from the first strong character of the *value*,
    and an empty field has none — so it falls back to LTR and puts the Hebrew
@@ -475,6 +480,8 @@ button{font:inherit;cursor:pointer}
   <div class="attach">
     <button type="button" id="b-pick" class="chip">📎 צירוף תמונה</button>
     <button type="button" id="b-cam" class="chip">📷 צילום</button>
+    <!-- shown only where the browser can actually listen -->
+    <button type="button" id="b-mic" class="chip" hidden>🎤 הקלטה</button>
   </div>
   <!-- no `capture` on the first input: the OS picker then offers camera *and*
        gallery. The second input is the explicit one-tap camera path. -->
@@ -703,7 +710,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 21;
+const APP_VERSION = 22;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -944,6 +951,92 @@ async function attach(file){
   }
 }
 
+/* ---- the message box grows with the message -------------------- */
+/* Up to twice its resting height, then it scrolls. The resting height comes
+   from the stylesheet rather than a second copy of the number here. */
+let textBase = 0;
+
+function growText(){
+  const el = $('i-text');
+  if (!textBase) textBase = parseFloat(getComputedStyle(el).minHeight) || 150;
+  el.style.height = 'auto';                       // shrink first, or it only ever grows
+  el.style.height = Math.min(textBase * 2, Math.max(textBase, el.scrollHeight)) + 'px';
+}
+
+/* ---- dictation -------------------------------------------------- */
+/* Hebrew regardless of what the phone is set to: this app is used in one
+   language, and a device in English would otherwise transcribe nonsense.
+   The button only exists where the browser can actually listen. */
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const voice = { rec:null, base:'', said:'' };
+
+function joinSpoken(before, spoken){
+  if (!spoken) return before;        // nothing to add, and no space either
+  if (!before) return spoken;
+  return /\s$/.test(before) ? before + spoken : before + ' ' + spoken;
+}
+
+function setRecording(on){
+  $('b-mic').classList.toggle('rec', on);
+  $('b-mic').textContent = on ? '⏹ עצירה' : '🎤 הקלטה';
+}
+
+function startVoice(){
+  voice.rec = new SpeechRec();
+  voice.rec.lang = 'he-IL';
+  voice.rec.continuous = true;
+  voice.rec.interimResults = true;      // the words appear as they are said
+  voice.base = $('i-text').value;
+  voice.said = '';
+
+  /* Every piece is trimmed and joined with a single space rather than
+     concatenated: whether a transcript arrives with a leading space is up to
+     the engine, and without this the words run together — "בארבעומשחק". */
+  voice.rec.onresult = e => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++){
+      const said = String(e.results[i][0].transcript || '').trim();
+      if (!said) continue;
+      if (e.results[i].isFinal) voice.said = joinSpoken(voice.said, said);
+      else interim = joinSpoken(interim, said);
+    }
+    $('i-text').value = joinSpoken(voice.base, joinSpoken(voice.said, interim));
+    growText();
+  };
+
+  voice.rec.onerror = e => {
+    const why = e.error === 'not-allowed' || e.error === 'service-not-allowed'
+        ? 'אין הרשאה למיקרופון. אפשרו אותה בהגדרות הדפדפן.'
+      : e.error === 'no-speech' ? 'לא נשמע דיבור. נסו שוב.'
+      : e.error === 'audio-capture' ? 'לא נמצא מיקרופון.'
+      : e.error === 'network' ? 'ההקלטה דורשת חיבור לרשת.'
+      : e.error === 'aborted' ? ''            // the user stopped it; not an error
+      : 'ההקלטה נכשלה. נסו שוב.';
+    if (why) say('input-msg', why, 'err');
+  };
+
+  /* fires on stop, on error, and when the browser decides it has heard enough */
+  voice.rec.onend = () => { voice.rec = null; setRecording(false); };
+
+  try {
+    voice.rec.start();
+    setRecording(true);
+    say('input-msg', '', 'err');
+    $('i-text').blur();                   // the keyboard is only in the way now
+  } catch {
+    voice.rec = null;
+    setRecording(false);
+    say('input-msg', 'לא הצלחתי להפעיל את ההקלטה.', 'err');
+  }
+}
+
+function stopVoice(){ if (voice.rec) voice.rec.stop(); }
+
+function toggleVoice(){
+  if (voice.rec) voice.rec.stop();
+  else startVoice();
+}
+
 /* ---- shared in from another app -------------------------------- */
 /* A photo forwarded from WhatsApp reaches the service worker as a POST, which
    parks it in a cache and redirects here. This is the collection end: it takes
@@ -960,7 +1053,7 @@ async function takeShared(){
     if (textRes){
       const text = (await textRes.text()).trim();
       await cache.delete(SHARE_TEXT);
-      if (text){ $('i-text').value = text; got.text = true; }
+      if (text){ $('i-text').value = text; growText(); got.text = true; }
     }
 
     const fileRes = await cache.match(SHARE_FILE);
@@ -1153,6 +1246,7 @@ const UI_ANSWER = { btn:'b-answer', spin:'answer-spin', label:'answer-label',
 
 /* A fresh message always starts a fresh exchange. */
 async function parse(){
+  stopVoice();                       // whatever was said is in the box by now
   const text = $('i-text').value.trim();
   if (!text && !state.image){
     say('input-msg', 'הדביקו הודעה או צרפו תמונה.', 'err');
@@ -2340,7 +2434,9 @@ async function submit(){
 }
 
 function reset(){
+  stopVoice();
   $('i-text').value = '';
+  growText();
   detach();
   clearQA();
   state.event = {};
@@ -2416,6 +2512,12 @@ $('b-settings').addEventListener('click', () => openSetup(''));
 $('b-parse').addEventListener('click', parse);
 $('b-answer').addEventListener('click', answer);
 $('i-answer').addEventListener('keydown', e => { if (e.key === 'Enter') answer(); });
+
+$('i-text').addEventListener('input', growText);
+if (SpeechRec){
+  $('b-mic').hidden = false;
+  $('b-mic').addEventListener('click', toggleVoice);
+}
 
 $('b-pick').addEventListener('click', () => $('f-pick').click());
 $('b-cam').addEventListener('click',  () => $('f-cam').click());

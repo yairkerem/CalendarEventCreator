@@ -554,6 +554,8 @@ button{font:inherit;cursor:pointer}
        confirmed one at a time, and this is the queue behind the current one. -->
   <div id="p-batch" class="batch" hidden>
     <h3 id="p-batch-head"></h3>
+    <!-- when the list came back short of what was in the message -->
+    <div id="p-overflow" class="msg note" style="margin:0 0 10px" hidden></div>
     <div id="p-batch-list" class="list"></div>
   </div>
 
@@ -742,7 +744,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 27;
+const APP_VERSION = 28;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -798,6 +800,8 @@ const state = {
   batch:[],        // every event the last parse returned, in order
   bi:0,            // which one of them is on screen
   outcomes:[],     // 'made' | 'skipped' per batch index, sparse until decided
+  found:0,         // how many events the backend read out of the message
+  overflow:'',     // '' | 'cap' | 'cut' — why the queue is shorter than that
   created:[],      // {title, when} for each one that actually reached the calendar
   repeat:'none',   // 'none' | 'weekly' — what the chips on screen currently say
   amendLog:[],     // [{role,content}] of the corrections typed for THIS event
@@ -1791,6 +1795,9 @@ function fillProposal(res){
   state.bi       = 0;
   state.outcomes = [];
   state.created  = [];
+  /* how many the backend read, and why the queue is shorter if it is */
+  state.found    = Number(res.found) || list.length;
+  state.overflow = res.overflow || '';
   state.alts     = Array.isArray(res.alternatives) ? res.alternatives.filter(a => a && a.id) : [];
 
   /* Same story for `intent`: absent means create, which is what it always was. */
@@ -1848,6 +1855,20 @@ function renderBatch(){
   $('p-batch-head').textContent =
     'זוהו ' + state.batch.length + ' אירועים בהודעה · ' +
     (state.bi + 1) + ' מתוך ' + state.batch.length;
+
+  /* Anything the message held that did not make it into the queue is said out
+     loud. A schedule handed over whole is expected to arrive whole, and events
+     quietly missing from the end is the one failure nobody would notice. */
+  const missing = Math.max(0, state.found - state.batch.length);
+  $('p-overflow').hidden = !state.overflow;
+  $('p-overflow').textContent =
+    state.overflow === 'cap'
+      ? 'בהודעה זוהו ' + state.found + ' אירועים, ואפשר לטפל ב-' + state.batch.length +
+        ' בבת אחת. ' + missing + ' הנותרים לא ברשימה — שלחו אותם בהודעה נפרדת.'
+    : state.overflow === 'cut'
+      ? 'ייתכן שהרשימה נקטעה ולא כל האירועים שבהודעה מופיעים כאן. ' +
+        'השוו מול המקור, ושלחו בנפרד את מה שחסר.'
+    : '';
 
   const box = $('p-batch-list');
   box.textContent = '';
@@ -2655,6 +2676,9 @@ function reset(){
   state.bi    = 0;
   state.outcomes = [];
   state.created  = [];
+  state.found    = 0;
+  state.overflow = '';
+  $('p-overflow').hidden = true;
   state.mode   = 'create';
   state.match  = null;
   state.alts   = [];

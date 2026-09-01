@@ -7,7 +7,7 @@
  * cross-origin POST, and the guard in fetch() below only ever handles
  * same-origin GETs. Responses from the backend never enter the cache.
  */
-const CACHE_VERSION = 'v24';
+const CACHE_VERSION = 'v25';
 const CACHE = 'event-creator-shell-' + CACHE_VERSION;
 
 /* Where a share from another app is parked between the POST that delivers it
@@ -58,7 +58,10 @@ async function receiveShare(request){
     const form = await request.formData();
     const cache = await caches.open(SHARE_CACHE);
 
-    const file = form.get('file') || form.get('image');
+    /* One form field per accepted kind: Android builds its intent filter from
+       these, and a single field mixing image/* with application/pdf did not
+       get a scanner app to offer us. Whichever one arrives, we take it. */
+    const file = form.get('file') || form.get('pdf') || form.get('image');
     if (file && file.size){
       /* A cached body comes back as a nameless blob, so the filename rides
          along in a header — it is all the page can show for a PDF. */

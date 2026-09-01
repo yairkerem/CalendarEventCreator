@@ -19,7 +19,10 @@
       "title": "title",
       "text": "text",
       "url": "url",
-      "files": [{ "name": "file", "accept": ["image/*", "application/pdf"] }]
+      "files": [
+        { "name": "file", "accept": ["image/*"] },
+        { "name": "pdf",  "accept": ["application/pdf", ".pdf"] }
+      ]
     }
   },
   "icons": [

@@ -362,6 +362,15 @@ button{font:inherit;cursor:pointer}
 }
 .chip:active{background:var(--surface-2)}
 .chip.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+
+/* The three ways into a message — attach, photograph, dictate. The icons say
+   it on their own, so the labels come off and the glyphs grow into the space;
+   the names live on aria-label for anyone not going by the picture. */
+.chip.icon{
+  justify-content:center;
+  min-width:60px;min-height:54px;padding:8px 14px;
+  font-size:1.6rem;line-height:1;
+}
 .thumb{position:relative;margin-top:12px;display:inline-block}
 .thumb img{
   display:block;max-height:132px;max-width:100%;
@@ -478,10 +487,10 @@ button{font:inherit;cursor:pointer}
   </div>
 
   <div class="attach">
-    <button type="button" id="b-pick" class="chip">📎 צירוף תמונה</button>
-    <button type="button" id="b-cam" class="chip">📷 צילום</button>
+    <button type="button" id="b-pick" class="chip icon" aria-label="צירוף תמונה" title="צירוף תמונה">📎</button>
+    <button type="button" id="b-cam" class="chip icon" aria-label="צילום" title="צילום">📷</button>
     <!-- shown only where the browser can actually listen -->
-    <button type="button" id="b-mic" class="chip" hidden>🎤 הקלטה</button>
+    <button type="button" id="b-mic" class="chip icon" aria-label="הקלטה" title="הקלטה" hidden>🎤</button>
   </div>
   <!-- no `capture` on the first input: the OS picker then offers camera *and*
        gallery. The second input is the explicit one-tap camera path. -->
@@ -710,7 +719,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 22;
+const APP_VERSION = 23;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -977,8 +986,11 @@ function joinSpoken(before, spoken){
 }
 
 function setRecording(on){
-  $('b-mic').classList.toggle('rec', on);
-  $('b-mic').textContent = on ? '⏹ עצירה' : '🎤 הקלטה';
+  const b = $('b-mic');
+  b.classList.toggle('rec', on);
+  b.textContent = on ? '⏹' : '🎤';
+  b.setAttribute('aria-label', on ? 'עצירת ההקלטה' : 'הקלטה');
+  b.setAttribute('title',      on ? 'עצירת ההקלטה' : 'הקלטה');
 }
 
 function startVoice(){

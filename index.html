@@ -309,8 +309,11 @@ input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .batch .row.now{border-color:var(--accent);
   box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 40%,transparent)}
 .batch .row.past{opacity:.55}
-.batch .d{color:var(--muted);white-space:nowrap}
-.batch .t{color:var(--muted);direction:ltr;font-variant-numeric:tabular-nums;white-space:nowrap}
+/* The times are the supporting detail, so they give the title its room back
+   now that both ends of the event are shown. */
+.batch .d{color:var(--muted);white-space:nowrap;font-size:.82rem}
+.batch .t{color:var(--muted);direction:ltr;font-variant-numeric:tabular-nums;
+  white-space:nowrap;font-size:.82rem}
 .batch .n{flex:1;min-width:0;overflow-wrap:anywhere}
 .batch .mark{font-size:.72rem;font-weight:600;white-space:nowrap;color:var(--muted)}
 .batch .row.now .mark{color:var(--accent)}
@@ -667,6 +670,10 @@ button{font:inherit;cursor:pointer}
       <span id="create-spin" class="spin" hidden></span>
       <span id="create-label">יצירת האירוע</span>
     </button>
+    <button id="b-all" class="btn secondary" hidden>
+      <span id="all-spin" class="spin" hidden></span>
+      <span id="all-label">אישור כל האירועים</span>
+    </button>
     <button id="b-skip" class="btn secondary" hidden>דילוג על האירוע הזה</button>
     <button id="b-alts" class="btn secondary" hidden>זה לא האירוע הנכון — בחירת אחר</button>
     <button id="b-tocreate" class="btn secondary" hidden>יצירת אירוע חדש במקום</button>
@@ -735,7 +742,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 26;
+const APP_VERSION = 27;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1833,6 +1840,9 @@ function renderBatch(){
   const many = state.batch.length > 1;
   $('p-batch').hidden = !many;
   $('b-skip').hidden  = !many;
+  /* only worth offering while more than one is still undecided */
+  $('b-all').hidden = !many || pendingItems().length < 2;
+  $('all-label').textContent = allLabel();
   if (!many) return;
 
   $('p-batch-head').textContent =
@@ -1852,9 +1862,12 @@ function renderBatch(){
     d.className = 'd';
     d.textContent = weekdayShort(ev.date);
 
+    /* Both ends of the event, since approving the lot without stepping through
+       them means this row is the only place the times are read. */
+    const when = ev.end ? ev.start + '–' + ev.end : ev.start;
     const t = document.createElement('span');
     t.className = 't';
-    t.textContent = [dateShow(ev.date).slice(0, 5), ev.start].filter(Boolean).join(' ');
+    t.textContent = [dateShow(ev.date).slice(0, 5), when].filter(Boolean).join(' ');
 
     const n = document.createElement('span');
     n.className = 'n';
@@ -1896,6 +1909,110 @@ function advance(){
 function skipItem(){
   state.outcomes[state.bi] = 'skipped';
   advance();
+}
+
+/* ---- approving the whole queue at once -------------------------- */
+/* Which items are still undecided, the one on screen included. */
+function pendingItems(){
+  const out = [];
+  for (let i = state.bi; i < state.batch.length; i++){
+    if (i === state.bi || !state.outcomes[i]) out.push(i);
+  }
+  return out;
+}
+
+/* The event on screen is whatever the fields say, edits and all. The ones
+   behind it are what the parse left — plus the series end date the confirm
+   screen would have filled in when they came up, since nothing else will. */
+function batchEvent(i){
+  if (i === state.bi){
+    const weekly = repeatsWeekly();
+    return {
+      title:    fieldValue('title'),
+      date:     fieldValue('date'),
+      start:    fieldValue('start'),
+      end:      fieldValue('end'),
+      location: fieldValue('location'),
+      needsEnd: false, needsTitle: false, needsLocation: false,
+      note: (state.event && state.event.note) || '',
+      repeat:      weekly ? 'weekly' : 'none',
+      repeatUntil: weekly ? untilISO() : ''
+    };
+  }
+  const ev = state.batch[i] || {};
+  const weekly = ev.repeat === 'weekly';
+  return {
+    title:    String(ev.title || '').trim(),
+    date:     ev.date  || '',
+    start:    ev.start || '',
+    end:      ev.end   || '',
+    location: ev.location || '',
+    needsEnd: false, needsTitle: false, needsLocation: false,
+    note: ev.note || '',
+    repeat:      weekly ? 'weekly' : 'none',
+    repeatUntil: weekly ? (ev.repeatUntil || plusDaysISO(ev.date, DEFAULT_WEEKS * 7)) : ''
+  };
+}
+
+/** The same bar the create button is held to, applied without a form. */
+function eventReady(ev){
+  return !!(ev.title && /^\d{4}-\d{2}-\d{2}$/.test(ev.date) &&
+            validTime(ev.start) && validTime(ev.end) &&
+            (ev.repeat !== 'weekly' || weekCount(ev.date, ev.repeatUntil) >= 1));
+}
+
+/* Creating them one after another rather than at once: the backend takes one
+   event per call, and stopping on the first refusal leaves the rest of the
+   queue intact instead of half-writing it and losing track of where. */
+async function approveAll(){
+  const todo = pendingItems();
+  say('prop-msg', '', 'err');
+  busy('b-all', 'all-spin', 'all-label', true, 'יוצר…');
+
+  try {
+    for (let n = 0; n < todo.length; n++){
+      const i  = todo[n];
+      const ev = batchEvent(i);
+
+      /* an event that could not be created on its own is not created here
+         either — land on it and let it be finished by hand */
+      if (!eventReady(ev)){
+        state.bi = i; loadItem();
+        say('prop-msg', 'לאירוע הזה חסרים פרטים. השלימו אותו ואשרו, או דלגו עליו.', 'err');
+        return;
+      }
+
+      $('all-label').textContent = 'יוצר ' + (n + 1) + ' מתוך ' + todo.length + '…';
+
+      const r = await api({ secret:state.secret, action:'create', user:state.user, event:ev }, T_TEXT);
+      if (!r.ok){
+        state.bi = i; loadItem();
+        failedWith(r.error, 'prop-msg');
+        return;
+      }
+
+      state.outcomes[i] = 'made';
+      state.batch[i] = Object.assign({}, state.batch[i], ev);
+      state.created.push({
+        title: ev.title,
+        when:  r.when || whenText(ev),
+        updated: false,
+        count: r.repeat === 'weekly' ? (r.count || 0) : 0
+      });
+    }
+    renderDone();
+    show('done');
+  } catch (e){
+    say('prop-msg', netMessage(e), 'err');
+    renderBatch();                 // whatever did land is marked in the queue
+  } finally {
+    busy('b-all', 'all-spin', 'all-label', false, allLabel());
+  }
+}
+
+function allLabel(){
+  const left = pendingItems().length;
+  return left > 1 ? 'אישור כל ' + left + ' האירועים' : 'אישור כל האירועים';
 }
 
 /* What a created entry says about itself: the first occurrence, and — for a
@@ -2549,6 +2666,7 @@ function reset(){
   state.ambiguous = null;
   $('p-batch').hidden = true;
   $('b-skip').hidden  = true;
+  $('b-all').hidden   = true;
   $('repeat-field').hidden = true;
   $('until-field').hidden  = true;
   $('p-until').value = '';
@@ -2629,6 +2747,7 @@ $('i-text').addEventListener('paste', e => {
 
 $('b-create').addEventListener('click', submit);
 $('b-skip').addEventListener('click', skipItem);
+$('b-all').addEventListener('click', approveAll);
 /* The fields are readonly and raise no keyboard; they are the button that
    opens the wheels. */
 $('p-date').addEventListener('click',  () => openDateSheet('p-date',  'תאריך האירוע'));

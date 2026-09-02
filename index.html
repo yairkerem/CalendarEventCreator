@@ -362,6 +362,16 @@ button{font:inherit;cursor:pointer}
 .btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
 .btn.secondary{background:var(--surface);color:var(--text);border-color:var(--border);box-shadow:none}
 .btn.secondary:active{background:var(--surface-2)}
+/* Cancelling is the only irreversible thing the app does, so its button does
+   not look like the one that creates events. */
+.btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+.btn.danger:active{filter:brightness(.9)}
+/* The event being cancelled is shown as plain text, never as inputs: there is
+   one decision on this screen and no way to edit the event while making it. */
+.delcard{background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:16px 18px;margin:0 0 14px}
+.delcard .what{font-size:1.15rem;font-weight:600;margin:0 0 6px}
+.delcard .when{color:var(--muted);margin:0 0 2px}
 .stack{display:flex;flex-direction:column;gap:10px;margin-top:18px}
 
 /* ---- attachments --------------------------------------------- */
@@ -728,6 +738,32 @@ button{font:inherit;cursor:pointer}
 </section>
 
 <!-- ========================== RESULT =========================== -->
+<!-- =========================== CANCEL ========================== -->
+<section id="s-del" class="screen">
+  <h1>ביטול אירוע</h1>
+  <p class="lede">זה האירוע שיימחק מהיומן. הפעולה אינה הפיכה.</p>
+
+  <div class="delcard">
+    <p class="what" id="del-title"></p>
+    <p class="when" id="del-when" dir="auto"></p>
+    <p class="when" id="del-loc" hidden></p>
+  </div>
+
+  <p class="hint" id="del-series" hidden>אירוע חוזר. הביטול יחול על המופע הזה בלבד.</p>
+  <div id="del-msg" class="msg" hidden></div>
+  <div id="del-altlist" class="altlist" hidden></div>
+
+  <div class="stack">
+    <button id="b-del" class="btn danger">
+      <span id="del-spin" class="spin" hidden></span>
+      <span id="del-label">ביטול האירוע</span>
+    </button>
+    <button id="b-del-series" class="btn secondary" hidden>ביטול כל הסדרה</button>
+    <button id="b-del-alts" class="btn secondary" hidden>זה לא האירוע הנכון — בחירת אחר</button>
+    <button id="b-del-back" class="btn secondary">חזרה לעריכת ההודעה</button>
+  </div>
+</section>
+
 <section id="s-done" class="screen">
   <div class="done">
     <div class="tick">✓</div>
@@ -788,7 +824,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 44;
+const APP_VERSION = 45;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -850,7 +886,8 @@ const state = {
   repeat:'none',   // 'none' | 'weekly' — what the chips on screen currently say
   amendLog:[],     // [{role,content}] of the corrections typed for THIS event
   amended:[],      // fields the last correction moved, so the badges can say so
-  mode:'create',   // 'create' | 'update'
+  mode:'create',   // 'create' | 'update' | 'delete'
+  armSeries:false, // the whole-series cancel has been pressed once
   match:null,      // the existing event the backend thinks is being edited
   alts:[],         // other candidates the backend offered
   ambiguous:null,  // {weekday,tomorrow,nextWeek} when a bare weekday hit tomorrow
@@ -1537,6 +1574,22 @@ async function turn(text, withImage, ui){
     }
 
     clearQA();
+
+    /* Nothing was found to cancel: say so and stay put. Falling through to
+       the proposal screen would offer to create the very event the message
+       asked to call off. */
+    if (r.status === 'nomatch'){
+      if (r.matching) logMatch(r.matching, null);
+      say('input-msg', 'לא נמצא ביומן אירוע שמתאים לביטול. נסו לנסח מי ומתי.', 'err');
+      return;
+    }
+
+    if (r.intent === 'delete' && r.match && r.match.id){
+      fillDelete(r);
+      show('del');
+      return;
+    }
+
     fillProposal(r);
     show('prop');
   } catch (e){
@@ -2293,6 +2346,120 @@ function renderDone(){
   }
 }
 
+/* ---- cancelling an existing event ------------------------------- */
+/* Deliberately narrow: one event, shown as text, and one button that removes
+   it. No wheels, no correction box, no editable fields — a cancellation has
+   nothing to adjust, and offering adjustments would invite editing an event
+   on the way to deleting it. */
+function fillDelete(res){
+  state.mode    = 'delete';
+  state.match   = res.match;
+  state.alts    = Array.isArray(res.alternatives)
+                ? res.alternatives.filter(a => a && a.id) : [];
+  state.event   = {};
+  state.batch   = [];
+  state.created = [];
+  logReply(res, null, res.match);
+  if (res.matching) logMatch(res.matching, res.match);
+  say('del-msg', '', 'err');
+  renderDelete();
+}
+
+function renderDelete(){
+  const m = state.match || {};
+  $('del-title').textContent = m.title || '(ללא כותרת)';
+  $('del-when').textContent  = whenText(m);
+  $('del-loc').textContent   = m.location || '';
+  $('del-loc').hidden        = !m.location;
+
+  /* A repeating event is the one case where "cancel it" is ambiguous, so the
+     scope is stated rather than assumed and the wider action is its own
+     press. */
+  $('del-series').hidden   = !m.recurring;
+  $('b-del-series').hidden = !m.recurring;
+  disarmSeries();
+
+  $('b-del-alts').hidden  = !state.alts.length;
+  $('del-altlist').hidden = true;
+  renderDelAlts();
+}
+
+function renderDelAlts(){
+  const list = $('del-altlist');
+  list.textContent = '';
+  for (const a of state.alts){
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'alt';
+    const title = document.createElement('b');
+    title.textContent = a.title || '(ללא כותרת)';
+    const when = document.createElement('span');
+    when.textContent = whenText(a);
+    btn.append(title, when);
+    btn.addEventListener('click', () => {
+      const prev = state.match;
+      state.alts = state.alts.filter(x => x !== a);
+      if (prev) state.alts.unshift(prev);   // so you can switch back
+      state.match = a;
+      renderDelete();
+    });
+    list.append(btn);
+  }
+}
+
+/* One press away from deleting a whole term of training is one too few, so
+   the series button arms first and acts second. The single occurrence — what
+   this screen is actually about — stays a single press. */
+function disarmSeries(){
+  state.armSeries = false;
+  const b = $('b-del-series');
+  b.textContent = 'ביטול כל הסדרה';
+  b.classList.add('secondary');
+  b.classList.remove('danger');
+}
+
+function armSeries(){
+  if (state.armSeries) return confirmDelete('series');
+  state.armSeries = true;
+  const b = $('b-del-series');
+  b.textContent = 'בטוחים? לחצו שוב לביטול כל הסדרה';
+  b.classList.remove('secondary');
+  b.classList.add('danger');
+}
+
+async function confirmDelete(scope){
+  const m = state.match;
+  if (!m || !m.id) return;
+  const wide = scope === 'series';
+  say('del-msg', '', 'err');
+  if (wide) $('b-del-series').disabled = true;
+  else busy('b-del', 'del-spin', 'del-label', true, 'מבטל…');
+  try {
+    const r = await api({ secret: state.secret, action: 'delete',
+                          id: m.id, scope: wide ? 'series' : 'instance' }, T_TEXT);
+    if (!r.ok){ failedWith(r.error, 'del-msg'); return; }
+    renderCancelled(r, m);
+    show('done');
+  } catch (e){
+    say('del-msg', netMessage(e), 'err');
+  } finally {
+    $('b-del-series').disabled = false;
+    busy('b-del', 'del-spin', 'del-label', false, 'ביטול האירוע');
+  }
+}
+
+/* The result screen already exists; a cancellation only fills it differently.
+   What it names is what the calendar reported deleting, not what was parsed. */
+function renderCancelled(r, m){
+  state.created = [];
+  $('d-head').textContent  = r.scope === 'series' ? 'הסדרה בוטלה' : 'האירוע בוטל';
+  $('d-title').textContent = r.title || m.title || '';
+  $('d-when').textContent  = r.when  || whenText(m);
+  $('d-title').hidden = false;
+  $('d-when').hidden  = false;
+  $('d-list').hidden  = true;
+}
+
 /* An update must not blank the fields the message never mentioned. */
 function mergeOnto(match, parsed){
   const out = {};
@@ -3023,6 +3190,8 @@ function reset(){
   state.mode   = 'create';
   state.match  = null;
   state.alts   = [];
+  state.armSeries = false;
+  say('del-msg', '', 'err');
   state.repeat = 'none';
   state.amendLog = [];
   state.amended  = [];
@@ -3111,6 +3280,12 @@ $('i-text').addEventListener('paste', e => {
 });
 
 $('b-create').addEventListener('click', submit);
+$('b-del').addEventListener('click', () => confirmDelete('instance'));
+$('b-del-series').addEventListener('click', armSeries);
+$('b-del-alts').addEventListener('click', () => {
+  $('del-altlist').hidden = !$('del-altlist').hidden;
+});
+$('b-del-back').addEventListener('click', () => show('input'));
 $('b-skip').addEventListener('click', skipItem);
 $('b-all').addEventListener('click', approveAll);
 /* The fields are readonly and raise no keyboard; they are the button that

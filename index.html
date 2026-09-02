@@ -696,12 +696,16 @@ button{font:inherit;cursor:pointer}
        and a wrong date is the usual one. Applies to the event on screen. -->
   <div class="qa" id="amend">
     <div id="amend-log" class="qa-log" hidden></div>
-    <label for="i-amend" class="amend-label">משהו לא נכון? כתבו את התיקון</label>
+    <!-- The label used to read "עדכון הפרטים", which is exactly what someone
+         reaches for after editing a field by hand — and it does no such thing.
+         The fields above are already live; this box is only for a correction
+         said in words. -->
+    <label for="i-amend" class="amend-label">משהו לא נכון? כתבו את התיקון במילים</label>
     <input id="i-amend" type="text" dir="auto" autocomplete="off" enterkeyhint="send"
            placeholder="למשל: ראשון זה ה-6.9, לא ה-30.8">
     <button type="button" id="b-amend" class="btn secondary" style="margin-top:10px">
       <span id="amend-spin" class="spin" hidden></span>
-      <span id="amend-label">עדכון הפרטים</span>
+      <span id="amend-label">שליחת התיקון</span>
     </button>
   </div>
 
@@ -784,7 +788,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 39;
+const APP_VERSION = 40;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -2467,8 +2471,15 @@ function formEvent(){
   };
 }
 
+/* An empty box has nothing to send, so the button is not offered as though it
+   did. It used to sit there enabled and answer with an error. */
+function syncAmendButton(){
+  $('b-amend').disabled = !$('i-amend').value.trim();
+}
+
 function clearAmend(){
   $('i-amend').value = '';
+  syncAmendButton();
   $('amend-log').textContent = '';
   $('amend-log').hidden = true;
 }
@@ -2526,25 +2537,36 @@ async function amend(){
   } catch (e){
     say('prop-msg', netMessage(e), 'err');
   } finally {
-    busy('b-amend', 'amend-spin', 'amend-label', false, 'עדכון הפרטים');
+    busy('b-amend', 'amend-spin', 'amend-label', false, 'שליחת התיקון');
+    syncAmendButton();
   }
 }
 
 /** Writes the corrected event onto the form; returns the fields that moved. */
 function applyAmend(before, ev){
-  const changed = FIELDS.filter(f => String(ev[f] || '') !== String(before[f] || ''));
+  /* A correction never empties a field. Anything the reply leaves blank is
+     something it had nothing to say about, and blanking it would lose a value
+     that was on screen and correct — an end time going missing after a
+     correction about something else is not a correction. */
+  const keep = f => {
+    const next = ev[f];
+    return (next === null || next === undefined || next === '') ? (before[f] || '') : next;
+  };
+  const held = {};
+  FIELDS.forEach(f => { held[f] = keep(f); });
+  const changed = FIELDS.filter(f => String(held[f]) !== String(before[f] || ''));
 
-  $('p-title').value = ev.title    || '';
-  $('p-date').value  = dateShow(ev.date);
-  $('p-start').value = ev.start    || '';
-  $('p-end').value   = ev.end      || '';
-  $('p-loc').value   = ev.location || '';
+  $('p-title').value = held.title;
+  $('p-date').value  = dateShow(held.date);
+  $('p-start').value = held.start;
+  $('p-end').value   = held.end;
+  $('p-loc').value   = held.location;
   for (const id of ['p-title','p-date','p-start','p-end','p-loc']) $(id).classList.remove('bad');
 
   /* The queue row, the day view and the "which day did you mean" prompt all
      read the item, so the item has to move with the form. Repetition is not
      part of a text correction and stays exactly as the chips left it. */
-  const item = Object.assign({}, state.batch[state.bi], ev, {
+  const item = Object.assign({}, state.batch[state.bi], ev, held, {
     repeat:      before.repeat,
     repeatUntil: before.repeatUntil
   });
@@ -3054,7 +3076,9 @@ $('b-date-cancel').addEventListener('click', () => closeDateSheet(false));
 /* tapping the dimmed area outside the panel is a cancel, as it looks like one */
 $('datesheet').addEventListener('click', e => { if (e.target === $('datesheet')) closeDateSheet(false); });
 
-$('b-amend').addEventListener('click', amend);
+$("b-amend").addEventListener("click", amend);
+/* nothing to send until something is written, so the button says so */
+$("i-amend").addEventListener("input", syncAmendButton);
 $('i-amend').addEventListener('keydown', e => { if (e.key === 'Enter') amend(); });
 $('b-repeat-off').addEventListener('click',  () => setRepeat('none'));
 $('b-repeat-week').addEventListener('click', () => setRepeat('weekly'));

@@ -788,7 +788,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 42;
+const APP_VERSION = 43;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -2018,6 +2018,7 @@ function fillProposal(res){
      after it answers. So when the app lands on the wrong event, or on none,
      the only way to tell a bad search phrase from a bad score is to read
      what was searched for and what it scored against. */
+  logReply(res, list[0], wantsUpdate ? res.match : null);
   if (res.matching) logMatch(res.matching, wantsUpdate ? res.match : null);
 
   /* An older backend hangs the ambiguity off the reply rather than the event. */
@@ -2412,6 +2413,25 @@ function renderVoiceLog(){
   box.textContent = voice.log.join('\n');
   box.scrollTop = box.scrollHeight;
   $('b-voice-copy').hidden = !voice.diag || !voice.log.length;
+}
+
+/* Where a value went missing is three questions, not one: did the model
+   return it, did the calendar have it, and did the merge keep it. Printing
+   all three side by side answers them together. */
+function logReply(res, parsed, match){
+  const pad = '\n        ';
+  const row = e => e ? FIELDS.map(function (f) {
+    const v = e[f];
+    return f + '=' + JSON.stringify(v === undefined ? null : v);
+  }).join('  ') : '(אין)';
+  logVoice('תשובה', [
+    'intent=' + (res.intent || 'create') +
+      '  אירועים=' + (res.events ? res.events.length : 0) +
+      '  חלופות=' + ((res.alternatives || []).length),
+    'מהניתוח: ' + row(parsed),
+    'מהיומן: ' + row(match),
+    'למסך:   ' + row(match && parsed ? mergeOnto(match, parsed) : parsed)
+  ].join(pad));
 }
 
 /** What the backend looked for, where, and what it scored. */

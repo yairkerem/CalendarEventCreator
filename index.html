@@ -481,6 +481,12 @@ button{font:inherit;cursor:pointer}
       <button type="button" id="b-check-update" class="chip">🔄 בדיקת עדכון</button>
     </div>
     <p class="hint muted" id="ver-line"></p>
+    <!-- which speech engine the microphone gets, and a way to fetch the
+         on-device one when the phone has it available but not installed -->
+    <p class="hint muted" id="voice-line" hidden></p>
+    <div class="attach" id="voice-get" hidden>
+      <button type="button" id="b-voice-install" class="chip">הורדת עברית לעיבוד במכשיר</button>
+    </div>
   </div>
 
   <div id="setup-msg" class="msg" hidden></div>
@@ -762,7 +768,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 31;
+const APP_VERSION = 33;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -905,6 +911,7 @@ function openSetup(message){
   say('setup-msg', message || '', 'err');
   show('setup');
   $('i-secret').focus();
+  showVoiceEngine();                    // asked each time; a pack can arrive
 }
 
 async function connect(){
@@ -1080,7 +1087,7 @@ function growText(){
    language, and a device in English would otherwise transcribe nonsense.
    The button only exists where the browser can actually listen. */
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-const voice = { rec:null, base:'', said:'' };
+const voice = { rec:null, base:'', onDevice:false, starting:false };
 
 function joinSpoken(before, spoken){
   if (!spoken) return before;        // nothing to add, and no space either
@@ -1097,30 +1104,68 @@ function setRecording(on){
   b.setAttribute('title',      on ? 'עצירת ההקלטה' : 'הקלטה');
 }
 
-function startVoice(){
-  voice.rec = new SpeechRec();
-  voice.rec.lang = 'he-IL';
-  voice.rec.continuous = true;
-  voice.rec.interimResults = true;      // the words appear as they are said
-  voice.base = $('i-text').value;
-  voice.said = '';
+/**
+ * Ask for recognition that runs on the phone rather than on a server.
+ *
+ * This is the difference between this button and the keyboard's microphone:
+ * the keyboard dictates on-device, Chrome ships the audio off by default, and
+ * the two are not the same quality. The web API can request on-device — but it
+ * is not widely supported, so it is asked for only when the browser says
+ * Hebrew is genuinely available that way, and silently skipped otherwise.
+ *
+ * @returns {Promise<boolean>} whether on-device was actually granted
+ */
+async function preferOnDevice(rec){
+  try {
+    if (!('processLocally' in rec) || typeof SpeechRec.available !== 'function') return false;
+    const state = await SpeechRec.available({ langs: ['he-IL'], processLocally: true });
+    if (state === 'available'){
+      rec.processLocally = true;
+      return true;
+    }
+  } catch {
+    // an engine that does not know the question is answering "no"
+  }
+  return false;
+}
 
-  /* Every piece is trimmed and joined with a single space rather than
-     concatenated: whether a transcript arrives with a leading space is up to
-     the engine, and without this the words run together — "בארבעומשחק". */
-  voice.rec.onresult = e => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++){
+async function startVoice(){
+  if (voice.starting) return;           // the on-device check is awaited below
+  voice.starting = true;
+
+  /* Built on a local, and only handed to `voice` once it is really listening:
+     asking about on-device support takes a turn of the event loop, and a
+     second tap in that gap would otherwise stop a recogniser that had not
+     started. */
+  const rec = new SpeechRec();
+  rec.lang = 'he-IL';
+  rec.continuous = true;
+  rec.interimResults = true;            // the words appear as they are said
+  voice.onDevice = await preferOnDevice(rec);
+  voice.base = $('i-text').value;
+
+  /* Read from the whole result list every time, never appended to. The engine
+     re-delivers results — an utterance arrives again each time it is revised,
+     and again when it turns final — so adding each event's share to a running
+     string repeated every word several times over. Rebuilding is idempotent:
+     the same event delivered twice produces the same sentence.
+   *
+   * Every piece is trimmed and joined with a single space rather than
+   * concatenated: whether a transcript arrives with a leading space is up to
+   * the engine, and without this the words run together — "בארבעומשחק". */
+  rec.onresult = e => {
+    let heard = '', interim = '';
+    for (let i = 0; i < e.results.length; i++){
       const said = String(e.results[i][0].transcript || '').trim();
       if (!said) continue;
-      if (e.results[i].isFinal) voice.said = joinSpoken(voice.said, said);
+      if (e.results[i].isFinal) heard = joinSpoken(heard, said);
       else interim = joinSpoken(interim, said);
     }
-    $('i-text').value = joinSpoken(voice.base, joinSpoken(voice.said, interim));
+    $('i-text').value = joinSpoken(voice.base, joinSpoken(heard, interim));
     growText();
   };
 
-  voice.rec.onerror = e => {
+  rec.onerror = e => {
     const why = e.error === 'not-allowed' || e.error === 'service-not-allowed'
         ? 'אין הרשאה למיקרופון. אפשרו אותה בהגדרות הדפדפן.'
       : e.error === 'no-speech' ? 'לא נשמע דיבור. נסו שוב.'
@@ -1132,25 +1177,77 @@ function startVoice(){
   };
 
   /* fires on stop, on error, and when the browser decides it has heard enough */
-  voice.rec.onend = () => { voice.rec = null; setRecording(false); };
+  rec.onend = () => { voice.rec = null; setRecording(false); };
 
   try {
-    voice.rec.start();
+    rec.start();
+    voice.rec = rec;                    // now it is genuinely listening
     setRecording(true);
     say('input-msg', '', 'err');
-    $('i-text').blur();                   // the keyboard is only in the way now
+    $('i-text').blur();                 // the keyboard is only in the way now
   } catch {
     voice.rec = null;
     setRecording(false);
     say('input-msg', 'לא הצלחתי להפעיל את ההקלטה.', 'err');
+  } finally {
+    voice.starting = false;
   }
 }
 
 function stopVoice(){ if (voice.rec) voice.rec.stop(); }
 
+/* Which engine the microphone will get, said plainly in settings. The keyboard
+   dictates on the phone; this button gets whatever the browser offers, and the
+   difference is worth being able to see rather than guess at. */
+async function voiceEngineState(){
+  if (!SpeechRec) return 'none';
+  if (typeof SpeechRec.available !== 'function') return 'remote';
+  try {
+    const state = await SpeechRec.available({ langs: ['he-IL'], processLocally: true });
+    return state === 'available' ? 'local'
+         : state === 'downloadable' ? 'downloadable'
+         : state === 'downloading' ? 'downloading'
+         : 'remote';
+  } catch {
+    return 'remote';
+  }
+}
+
+async function showVoiceEngine(){
+  const state = await voiceEngineState();
+  const line = $('voice-line');
+
+  line.hidden = false;
+  line.textContent =
+      state === 'none'         ? 'הכתבה: אינה נתמכת בדפדפן הזה.'
+    : state === 'local'        ? 'הכתבה: מעובדת במכשיר.'
+    : state === 'downloading'  ? 'הכתבה: חבילת העברית מורדת כעת.'
+    : state === 'downloadable' ? 'הכתבה: מעובדת בשרת. אפשר להוריד עברית לעיבוד במכשיר.'
+    :                            'הכתבה: מעובדת בשרת.';
+
+  /* Offered, never automatic: it is a download onto someone's phone. */
+  $('voice-get').hidden = state !== 'downloadable';
+}
+
+async function installVoicePack(){
+  const btn = $('b-voice-install');
+  btn.disabled = true;
+  btn.textContent = 'מוריד…';
+  try {
+    await SpeechRec.install({ langs: ['he-IL'], processLocally: true });
+    say('setup-msg', 'העברית הותקנה. ההכתבה תעובד מעכשיו במכשיר.', 'ok');
+  } catch {
+    say('setup-msg', 'הורדת חבילת העברית נכשלה.', 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'הורדת עברית לעיבוד במכשיר';
+    showVoiceEngine();
+  }
+}
+
 function toggleVoice(){
   if (voice.rec) voice.rec.stop();
-  else startVoice();
+  else startVoice();          /* async: the on-device check has to be awaited */
 }
 
 /* ---- shared in from another app -------------------------------- */
@@ -2944,6 +3041,7 @@ async function checkUpdate(){
 
 $('b-update').addEventListener('click', applyUpdate);
 $('b-check-update').addEventListener('click', checkUpdate);
+$('b-voice-install').addEventListener('click', installVoicePack);
 $('ver-line').textContent = 'גרסת אפליקציה: ' + APP_VERSION;
 
 if ('serviceWorker' in navigator){

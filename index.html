@@ -824,7 +824,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 46;
+const APP_VERSION = 47;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -3417,6 +3417,28 @@ function newWorkerOutcome(reg, ms){
   });
 }
 
+/* "No new worker appeared" is not the same as "you are on the latest", and
+   reporting the first as the second sent us hunting a phantom: the app said
+   it was current while a newer build sat published. GitHub Pages serves sw.js
+   with max-age=600 through a CDN, so for up to ten minutes after a push an
+   edge node still answers with the old one and nothing looks wrong.
+
+   So the published worker is read directly, under a one-off URL the CDN has
+   never seen and with no-store so the browser cannot answer from its own
+   copy, and its CACHE_VERSION — kept in step with APP_VERSION by hand — says
+   what is actually out there.
+   @returns {?number} the published build, or null if it could not be read. */
+async function publishedVersion(){
+  try {
+    const res = await fetch('sw.js?ts=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) return null;
+    const m = (await res.text()).match(/CACHE_VERSION\s*=\s*'v(\d+)'/);
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;                      // offline is not evidence either way
+  }
+}
+
 async function checkUpdate(){
   if (!swReg){
     say('setup-msg', 'עדכונים אינם נתמכים בדפדפן הזה.', 'err');
@@ -3442,8 +3464,15 @@ async function checkUpdate(){
       case 'failed':
         say('setup-msg', 'הורדת הגרסה החדשה נכשלה. נסו שוב, או התקינו מחדש.', 'err');
         break;
-      default:
-        say('setup-msg', 'האפליקציה מעודכנת (גרסה ' + APP_VERSION + ').', 'ok');
+      default: {
+        const live = await publishedVersion();
+        if (live && live > APP_VERSION){
+          say('setup-msg', 'קיימת כבר גרסה ' + live + ', אבל הדפדפן עדיין מגיש את ' +
+            APP_VERSION + '. זה נפתר מעצמו תוך כעשר דקות — נסו שוב אז.', 'err');
+        } else {
+          say('setup-msg', 'האפליקציה מעודכנת (גרסה ' + APP_VERSION + ').', 'ok');
+        }
+      }
     }
   } catch {
     say('setup-msg', 'בדיקת העדכון נכשלה. בדקו את החיבור.', 'err');

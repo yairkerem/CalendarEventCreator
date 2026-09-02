@@ -496,10 +496,10 @@ button{font:inherit;cursor:pointer}
     <div class="attach" id="voice-get" hidden>
       <button type="button" id="b-voice-install" class="chip">הורדת עברית לעיבוד במכשיר</button>
     </div>
-    <!-- records exactly what the speech engine sends, so a fault can be read
-         rather than guessed at -->
-    <div class="attach" id="voice-diag-row" hidden>
-      <button type="button" id="b-voice-diag" class="chip">אבחון הכתבה: כבוי</button>
+    <!-- records exactly what the speech engine sends and how an existing
+         event was matched, so a fault can be read rather than guessed at -->
+    <div class="attach" id="voice-diag-row">
+      <button type="button" id="b-voice-diag" class="chip">אבחון: כבוי</button>
       <button type="button" id="b-voice-copy" class="chip" hidden>העתקת היומן</button>
     </div>
     <pre id="voice-log" class="difflog" hidden></pre>
@@ -788,7 +788,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 40;
+const APP_VERSION = 41;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1313,7 +1313,6 @@ async function showVoiceEngine(){
 
   /* Offered, never automatic: it is a download onto someone's phone. */
   $('voice-get').hidden = state !== 'downloadable';
-  $("voice-diag-row").hidden = state === "none";
 }
 
 async function installVoicePack(){
@@ -2015,6 +2014,12 @@ function fillProposal(res){
   state.match = wantsUpdate ? res.match : null;
   state.mode  = wantsUpdate ? 'update' : 'create';
 
+  /* The model does not see the calendar; the match is made in the backend
+     after it answers. So when the app lands on the wrong event, or on none,
+     the only way to tell a bad search phrase from a bad score is to read
+     what was searched for and what it scored against. */
+  if (res.matching) logMatch(res.matching, wantsUpdate ? res.match : null);
+
   /* An older backend hangs the ambiguity off the reply rather than the event. */
   if (list.length && !list[0].ambiguousDay && res.ambiguousDay){
     list[0].ambiguousDay = res.ambiguousDay;
@@ -2409,6 +2414,26 @@ function renderVoiceLog(){
   $('b-voice-copy').hidden = !voice.diag || !voice.log.length;
 }
 
+/** What the backend looked for, where, and what it scored. */
+function logMatch(m, chosen){
+  const best = (m.best && m.best.length) ? m.best
+             : ['— אין אירועים בחלון הזמן הזה —'];
+  logVoice('חיפוש', 'ביקש: ' + JSON.stringify(m.searchedFor || '') +
+    '
+        מילים: ' + (m.words || '(אין)') +
+    '
+        עוגן: ' + (m.anchor || '(אין)') + '  ± שבוע' +
+    '
+        נסרקו: ' + m.scanned +
+    '
+        ' + best.join('
+        ') +
+    '
+        נבחר: ' +
+      (chosen ? chosen.title + ' [' + chosen.date + ']'
+              : 'אף אחד — ייווצר אירוע חדש'));
+}
+
 /** Every result in the list, marked final or interim, in order. */
 function describeResults(e){
   const bits = [];
@@ -2422,7 +2447,7 @@ function describeResults(e){
 
 function toggleVoiceDiag(){
   voice.diag = !voice.diag;
-  $('b-voice-diag').textContent = 'אבחון הכתבה: ' + (voice.diag ? 'פועל' : 'כבוי');
+  $('b-voice-diag').textContent = 'אבחון: ' + (voice.diag ? 'פועל' : 'כבוי');
   if (voice.diag){
     voice.log = [];
     voice.t0 = Date.now();
@@ -2430,7 +2455,7 @@ function toggleVoiceDiag(){
        about a particular version, and one session was spent diagnosing a fault
        that had already been fixed in a build the phone had not taken yet. */
     voice.log.push('— אבחון פועל · גרסת אפליקציה ' + APP_VERSION +
-                   '. הקליטו משפט קצר, עצרו, ואז העתיקו את היומן. —');
+                   '. בצעו את הפעולה שנכשלה, ואז העתיקו את היומן. —');
   }
   renderVoiceLog();
 }

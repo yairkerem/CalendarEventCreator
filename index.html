@@ -260,6 +260,15 @@ input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .qa-log .said{font-size:.88rem;color:var(--muted);padding-inline-start:14px;
   border-inline-start:2px solid var(--border)}
 
+/* the dictation diagnostic's transcript of events */
+.difflog{
+  max-height:240px;overflow:auto;margin:10px 0 0;padding:10px 12px;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:10px;
+  direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-word;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.72rem;
+  color:var(--text);
+}
+
 /* ---- free-text correction ------------------------------------- */
 .amend-label{display:block;font-size:.8rem;font-weight:600;color:var(--muted);margin:0 0 8px}
 /* the shared spinner is drawn for an accent background; on a secondary
@@ -487,6 +496,13 @@ button{font:inherit;cursor:pointer}
     <div class="attach" id="voice-get" hidden>
       <button type="button" id="b-voice-install" class="chip">הורדת עברית לעיבוד במכשיר</button>
     </div>
+    <!-- records exactly what the speech engine sends, so a fault can be read
+         rather than guessed at -->
+    <div class="attach" id="voice-diag-row" hidden>
+      <button type="button" id="b-voice-diag" class="chip">אבחון הכתבה: כבוי</button>
+      <button type="button" id="b-voice-copy" class="chip" hidden>העתקת היומן</button>
+    </div>
+    <pre id="voice-log" class="difflog" hidden></pre>
   </div>
 
   <div id="setup-msg" class="msg" hidden></div>
@@ -768,7 +784,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 34;
+const APP_VERSION = 35;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1087,7 +1103,8 @@ function growText(){
    language, and a device in English would otherwise transcribe nonsense.
    The button only exists where the browser can actually listen. */
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-const voice = { rec:null, base:'', onDevice:false, starting:false, wanted:false };
+const voice = { rec:null, base:"", onDevice:false, starting:false, wanted:false,
+                diag:false, log:[], t0:0, session:0 };
 
 function joinSpoken(before, spoken){
   if (!spoken) return before;        // nothing to add, and no space either
@@ -1149,6 +1166,7 @@ async function startVoice(){
   voice.onDevice = await preferOnDevice(rec);
   voice.base = $('i-text').value;
   voice.wanted = true;                  // cleared by stopping, or by any error
+  voice.session = 1;
 
   /* Read from the whole result list every time, never appended to. The engine
      re-delivers results — an utterance arrives again each time it is revised,
@@ -1159,7 +1177,10 @@ async function startVoice(){
    * Every piece is trimmed and joined with a single space rather than
    * concatenated: whether a transcript arrives with a leading space is up to
    * the engine, and without this the words run together — "בארבעומשחק". */
+  rec.onstart = () => logVoice('start', 'session ' + voice.session);
+
   rec.onresult = e => {
+    logVoice('result', describeResults(e));
     let heard = '', interim = '', last = '';
     for (let i = 0; i < e.results.length; i++){
       const said = String(e.results[i][0].transcript || '').trim();
@@ -1176,6 +1197,10 @@ async function startVoice(){
       }
     }
     $('i-text').value = joinSpoken(voice.base, joinSpoken(heard, interim));
+    logVoice('  box', 'base=' + JSON.stringify(voice.base) +
+                      ' heard=' + JSON.stringify(heard) +
+                      ' interim=' + JSON.stringify(interim) +
+                      ' -> ' + JSON.stringify($('i-text').value));
     growText();
   };
 
@@ -1187,6 +1212,7 @@ async function startVoice(){
       : e.error === 'network' ? 'ההקלטה דורשת חיבור לרשת.'
       : e.error === 'aborted' ? ''            // the user stopped it; not an error
       : 'ההקלטה נכשלה. נסו שוב.';
+    logVoice('error', e.error);
     if (why) say('input-msg', why, 'err');
     voice.wanted = false;                   // any error ends the run, silence included
   };
@@ -1196,9 +1222,18 @@ async function startVoice(){
      fresh utterance is started — that is what makes single-utterance mode feel
      continuous without inheriting its repetition. */
   rec.onend = () => {
+    logVoice('end', 'wanted=' + voice.wanted + ' box=' + JSON.stringify($('i-text').value));
     if (voice.wanted){
       voice.base = $('i-text').value;
-      try { rec.start(); return; } catch { /* fall through and stop */ }
+      voice.session++;
+      try {
+        rec.start();
+        logVoice('restart', 'session ' + voice.session +
+                            ' base=' + JSON.stringify(voice.base));
+        return;
+      } catch (err) {
+        logVoice('restart failed', String(err && err.name || err));
+      }
     }
     voice.rec = null;
     setRecording(false);
@@ -1252,6 +1287,7 @@ async function showVoiceEngine(){
 
   /* Offered, never automatic: it is a download onto someone's phone. */
   $('voice-get').hidden = state !== 'downloadable';
+  $("voice-diag-row").hidden = state === "none";
 }
 
 async function installVoicePack(){
@@ -2323,6 +2359,68 @@ function renderDayQuestion(){
   wire('b-day-next', a.nextWeek, 'בשבוע הבא');
 }
 
+/* ---- dictation diagnostic --------------------------------------- */
+/* Two guesses at the repetition were wrong, both of them plausible from the
+   outside. This records what the engine actually sends — every event, every
+   result, and what the box held afterwards — so the next reading is of
+   evidence rather than of my expectations. Off unless switched on. */
+const DIAG_MAX = 400;                   // enough for a long dictation, bounded
+
+function logVoice(what, detail){
+  if (!voice.diag) return;
+  const t = Date.now() - (voice.t0 || Date.now());
+  voice.log.push(String(t).padStart(6) + 'ms  ' + what +
+                 (detail ? '  ' + detail : ''));
+  if (voice.log.length > DIAG_MAX) voice.log.splice(0, voice.log.length - DIAG_MAX);
+  renderVoiceLog();
+}
+
+function renderVoiceLog(){
+  const box = $('voice-log');
+  box.hidden = !voice.diag;
+  box.textContent = voice.log.join('\n');
+  box.scrollTop = box.scrollHeight;
+  $('b-voice-copy').hidden = !voice.diag || !voice.log.length;
+}
+
+/** Every result in the list, marked final or interim, in order. */
+function describeResults(e){
+  const bits = [];
+  for (let i = 0; i < e.results.length; i++){
+    const r = e.results[i];
+    bits.push('[' + i + (r.isFinal ? ' F' : ' i') + '] ' +
+              JSON.stringify(String(r[0] && r[0].transcript || '')));
+  }
+  return 'idx=' + e.resultIndex + ' n=' + e.results.length + '  ' + bits.join('  ');
+}
+
+function toggleVoiceDiag(){
+  voice.diag = !voice.diag;
+  $('b-voice-diag').textContent = 'אבחון הכתבה: ' + (voice.diag ? 'פועל' : 'כבוי');
+  if (voice.diag){
+    voice.log = [];
+    voice.t0 = Date.now();
+    voice.log.push('— אבחון פועל. הקליטו משפט קצר, עצרו, ואז העתיקו את היומן. —');
+  }
+  renderVoiceLog();
+}
+
+async function copyVoiceLog(){
+  const text = voice.log.join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    say('setup-msg', 'היומן הועתק.', 'ok');
+  } catch {
+    /* clipboard refused: leave it selected so it can be copied by hand */
+    const box = $('voice-log');
+    const range = document.createRange();
+    range.selectNodeContents(box);
+    const sel = window.getSelection();
+    sel.removeAllRanges(); sel.addRange(range);
+    say('setup-msg', 'היומן מסומן — העתיקו אותו ידנית.', 'ok');
+  }
+}
+
 /* ---- free-text correction of the event on screen ---------------- */
 /* The fields above are editable, but "this one is next week" is a sentence,
    not five edits. The correction is applied to the event on screen only; the
@@ -3067,6 +3165,8 @@ async function checkUpdate(){
 $('b-update').addEventListener('click', applyUpdate);
 $('b-check-update').addEventListener('click', checkUpdate);
 $('b-voice-install').addEventListener('click', installVoicePack);
+$("b-voice-diag").addEventListener("click", toggleVoiceDiag);
+$("b-voice-copy").addEventListener("click", copyVoiceLog);
 $('ver-line').textContent = 'גרסת אפליקציה: ' + APP_VERSION;
 
 if ('serviceWorker' in navigator){

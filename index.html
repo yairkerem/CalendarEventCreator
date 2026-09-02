@@ -824,7 +824,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 45;
+const APP_VERSION = 46;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1015,6 +1015,23 @@ async function connect(){
 
 /* The backend version is here purely so a stale Apps Script deployment is
    visible at a glance — that failure mode is silent and wastes real time. */
+/* The `· vN` in the header exists to prove which backend is actually live, so
+   it must not go stale the moment a new one is deployed. A deploy happens with
+   the app sitting in the background, which used to leave the old number on
+   screen until the next cold start — the one reading that is supposed to be
+   trustworthy, quietly wrong. Re-read when the app comes back into view.
+   Rate-limited, because switching apps is not a reason to call a backend. */
+let lastPing = 0;
+function refreshWho(force){
+  if (!state.secret || document.hidden) return;
+  if (!force && Date.now() - lastPing < 30000) return;
+  lastPing = Date.now();
+  api({ secret: state.secret, action: 'ping' }, T_PING)
+    .then(r => { if (r && r.ok){ setWho(r.calendar, r.version); setPeople(r.people || [], 'backend'); } })
+    .catch(() => {});                 // a flaky network leaves the header be
+}
+document.addEventListener('visibilitychange', () => refreshWho(false));
+
 function setWho(board, version){
   const parts = [];
   if (state.user) parts.push('נוצר כ־' + state.user);
@@ -3493,9 +3510,7 @@ if (state.secret && state.user){
 
   /* quiet ping just to put the board name in the header; failures stay silent
      so a flaky network never blocks the input screen */
-  api({ secret: state.secret, action:'ping' }, T_PING)
-    .then(r => { if (r && r.ok){ setWho(r.calendar, r.version); setPeople(r.people || [], 'backend'); } })
-    .catch(() => {});
+  refreshWho(true);
 } else {
   openSetup('');
 }

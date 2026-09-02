@@ -784,7 +784,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 37;
+const APP_VERSION = 38;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1112,6 +1112,27 @@ function joinSpoken(before, spoken){
   return /\s$/.test(before) ? before + spoken : before + ' ' + spoken;
 }
 
+/** Is `longer` the same sentence as `shorter`, carried further on? */
+function extendsText(longer, shorter){
+  return shorter === '' || longer === shorter || longer.indexOf(shorter + ' ') === 0;
+}
+
+/**
+ * Fold one transcript into what has been heard so far.
+ *
+ * The engine on the phone re-transcribes the whole sentence each time and
+ * marks every version final: "יובל", then "יובל אימון", then "יובל אימון
+ * בניטה". Adding those together is what multiplied the words. A version that
+ * carries an earlier one further replaces it; a shorter version of what is
+ * already held is stale and dropped; only something genuinely new is appended,
+ * which is what an engine that sends real segments does instead.
+ */
+function foldSpoken(heard, said){
+  if (extendsText(said, heard)) return said;    // the same sentence, further on
+  if (extendsText(heard, said)) return heard;   // an older, shorter version
+  return joinSpoken(heard, said);               // a new segment
+}
+
 /* Both glyphs live in the button; the class decides which one shows, so this
    never touches the markup and cannot wipe the icons out. */
 function setRecording(on){
@@ -1191,23 +1212,11 @@ async function startVoice(){
   rec.onresult = e => {
     logVoice('result', describeResults(e));
     let heard = '', interim = '';
-    const taken = [];
     for (let i = 0; i < e.results.length; i++){
       const said = String(e.results[i][0].transcript || '').trim();
       if (!said) continue;
-      if (e.results[i].isFinal){
-        /* A whole final transcript that has already been taken in this same
-           pass is the engine repeating itself, not somebody saying the same
-           sentence twice — and the copies are not always adjacent, so it is
-           every one taken so far that has to be checked, not just the last.
-           The cost is that saying one identical sentence twice over in a
-           single dictation collapses to one; that is a fair trade. */
-        if (taken.indexOf(said) !== -1) continue;
-        taken.push(said);
-        heard = joinSpoken(heard, said);
-      } else {
-        interim = joinSpoken(interim, said);
-      }
+      if (e.results[i].isFinal) heard   = foldSpoken(heard, said);
+      else                      interim = foldSpoken(interim, said);
     }
     $('i-text').value = joinSpoken(voice.base, joinSpoken(heard, interim));
     logVoice('  box', 'base=' + JSON.stringify(voice.base) +

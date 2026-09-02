@@ -768,7 +768,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 33;
+const APP_VERSION = 34;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1087,7 +1087,7 @@ function growText(){
    language, and a device in English would otherwise transcribe nonsense.
    The button only exists where the browser can actually listen. */
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-const voice = { rec:null, base:'', onDevice:false, starting:false };
+const voice = { rec:null, base:'', onDevice:false, starting:false, wanted:false };
 
 function joinSpoken(before, spoken){
   if (!spoken) return before;        // nothing to add, and no space either
@@ -1139,10 +1139,16 @@ async function startVoice(){
      started. */
   const rec = new SpeechRec();
   rec.lang = 'he-IL';
-  rec.continuous = true;
+  /* One utterance per session, restarted on end for as long as the button is
+     held on. Continuous mode is where Android repeats itself — the same final
+     result comes back several times over in one result list — and no amount of
+     careful reading fixes a list that genuinely contains the sentence three
+     times. One utterance at a time is also how the keyboard behaves. */
+  rec.continuous = false;
   rec.interimResults = true;            // the words appear as they are said
   voice.onDevice = await preferOnDevice(rec);
   voice.base = $('i-text').value;
+  voice.wanted = true;                  // cleared by stopping, or by any error
 
   /* Read from the whole result list every time, never appended to. The engine
      re-delivers results — an utterance arrives again each time it is revised,
@@ -1154,12 +1160,20 @@ async function startVoice(){
    * concatenated: whether a transcript arrives with a leading space is up to
    * the engine, and without this the words run together — "בארבעומשחק". */
   rec.onresult = e => {
-    let heard = '', interim = '';
+    let heard = '', interim = '', last = '';
     for (let i = 0; i < e.results.length; i++){
       const said = String(e.results[i][0].transcript || '').trim();
       if (!said) continue;
-      if (e.results[i].isFinal) heard = joinSpoken(heard, said);
-      else interim = joinSpoken(interim, said);
+      if (e.results[i].isFinal){
+        /* A whole final transcript identical to the one before it is the
+           engine repeating itself, not somebody saying the same sentence
+           twice. Belt and braces alongside continuous:false. */
+        if (said === last) continue;
+        last = said;
+        heard = joinSpoken(heard, said);
+      } else {
+        interim = joinSpoken(interim, said);
+      }
     }
     $('i-text').value = joinSpoken(voice.base, joinSpoken(heard, interim));
     growText();
@@ -1174,10 +1188,21 @@ async function startVoice(){
       : e.error === 'aborted' ? ''            // the user stopped it; not an error
       : 'ההקלטה נכשלה. נסו שוב.';
     if (why) say('input-msg', why, 'err');
+    voice.wanted = false;                   // any error ends the run, silence included
   };
 
-  /* fires on stop, on error, and when the browser decides it has heard enough */
-  rec.onend = () => { voice.rec = null; setRecording(false); };
+  /* Fires after every utterance, not only at the end of dictation. While the
+     button is still on, what was just heard is folded into the base and a
+     fresh utterance is started — that is what makes single-utterance mode feel
+     continuous without inheriting its repetition. */
+  rec.onend = () => {
+    if (voice.wanted){
+      voice.base = $('i-text').value;
+      try { rec.start(); return; } catch { /* fall through and stop */ }
+    }
+    voice.rec = null;
+    setRecording(false);
+  };
 
   try {
     rec.start();
@@ -1194,7 +1219,7 @@ async function startVoice(){
   }
 }
 
-function stopVoice(){ if (voice.rec) voice.rec.stop(); }
+function stopVoice(){ voice.wanted = false; if (voice.rec) voice.rec.stop(); }
 
 /* Which engine the microphone will get, said plainly in settings. The keyboard
    dictates on the phone; this button gets whatever the browser offers, and the
@@ -1246,8 +1271,8 @@ async function installVoicePack(){
 }
 
 function toggleVoice(){
-  if (voice.rec) voice.rec.stop();
-  else startVoice();          /* async: the on-device check has to be awaited */
+  if (voice.rec) stopVoice();   /* clears "wanted", so onend does not restart */
+  else startVoice();            /* async: the on-device check has to be awaited */
 }
 
 /* ---- shared in from another app -------------------------------- */

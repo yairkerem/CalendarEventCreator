@@ -784,7 +784,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 35;
+const APP_VERSION = 36;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1103,8 +1103,8 @@ function growText(){
    language, and a device in English would otherwise transcribe nonsense.
    The button only exists where the browser can actually listen. */
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-const voice = { rec:null, base:"", onDevice:false, starting:false, wanted:false,
-                diag:false, log:[], t0:0, session:0 };
+const voice = { rec:null, base:"", onDevice:false, engine:"", starting:false,
+                wanted:false, diag:false, log:[], t0:0, session:0 };
 
 function joinSpoken(before, spoken){
   if (!spoken) return before;        // nothing to add, and no space either
@@ -1133,15 +1133,20 @@ function setRecording(on){
  * @returns {Promise<boolean>} whether on-device was actually granted
  */
 async function preferOnDevice(rec){
+  voice.engine = 'remote';
   try {
-    if (!('processLocally' in rec) || typeof SpeechRec.available !== 'function') return false;
+    if (!('processLocally' in rec) || typeof SpeechRec.available !== 'function'){
+      voice.engine = 'no-api';          // this browser cannot even be asked
+      return false;
+    }
     const state = await SpeechRec.available({ langs: ['he-IL'], processLocally: true });
+    voice.engine = state;               // available | downloadable | downloading | unavailable
     if (state === 'available'){
       rec.processLocally = true;
       return true;
     }
   } catch {
-    // an engine that does not know the question is answering "no"
+    voice.engine = 'error';             // an engine that cannot answer is saying no
   }
   return false;
 }
@@ -1164,6 +1169,9 @@ async function startVoice(){
   rec.continuous = false;
   rec.interimResults = true;            // the words appear as they are said
   voice.onDevice = await preferOnDevice(rec);
+  /* recorded here so a copied log answers "where was the audio processed"
+     without anyone having to go and look in settings */
+  logVoice("engine", voice.engine + (voice.onDevice ? "  -> ON-DEVICE" : "  -> SERVER"));
   voice.base = $('i-text').value;
   voice.wanted = true;                  // cleared by stopping, or by any error
   voice.session = 1;

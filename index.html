@@ -784,7 +784,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 36;
+const APP_VERSION = 37;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1161,12 +1161,13 @@ async function startVoice(){
      started. */
   const rec = new SpeechRec();
   rec.lang = 'he-IL';
-  /* One utterance per session, restarted on end for as long as the button is
-     held on. Continuous mode is where Android repeats itself — the same final
-     result comes back several times over in one result list — and no amount of
-     careful reading fixes a list that genuinely contains the sentence three
-     times. One utterance at a time is also how the keyboard behaves. */
-  rec.continuous = false;
+  /* Continuous, despite that being where the repetition came from. One
+     utterance per session cured the repetition and caused something worse: the
+     engine finalises on a pause, and whatever is said while the next session
+     is starting up is simply not heard — "4:45" arrived as "45". A duplicate
+     is visible and can be filtered; lost audio is gone and looks like a
+     correct transcript. The repeats are dealt with below instead. */
+  rec.continuous = true;
   rec.interimResults = true;            // the words appear as they are said
   voice.onDevice = await preferOnDevice(rec);
   /* recorded here so a copied log answers "where was the audio processed"
@@ -1189,16 +1190,20 @@ async function startVoice(){
 
   rec.onresult = e => {
     logVoice('result', describeResults(e));
-    let heard = '', interim = '', last = '';
+    let heard = '', interim = '';
+    const taken = [];
     for (let i = 0; i < e.results.length; i++){
       const said = String(e.results[i][0].transcript || '').trim();
       if (!said) continue;
       if (e.results[i].isFinal){
-        /* A whole final transcript identical to the one before it is the
-           engine repeating itself, not somebody saying the same sentence
-           twice. Belt and braces alongside continuous:false. */
-        if (said === last) continue;
-        last = said;
+        /* A whole final transcript that has already been taken in this same
+           pass is the engine repeating itself, not somebody saying the same
+           sentence twice — and the copies are not always adjacent, so it is
+           every one taken so far that has to be checked, not just the last.
+           The cost is that saying one identical sentence twice over in a
+           single dictation collapses to one; that is a fair trade. */
+        if (taken.indexOf(said) !== -1) continue;
+        taken.push(said);
         heard = joinSpoken(heard, said);
       } else {
         interim = joinSpoken(interim, said);

@@ -784,7 +784,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 38;
+const APP_VERSION = 39;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -2422,7 +2422,11 @@ function toggleVoiceDiag(){
   if (voice.diag){
     voice.log = [];
     voice.t0 = Date.now();
-    voice.log.push('— אבחון פועל. הקליטו משפט קצר, עצרו, ואז העתיקו את היומן. —');
+    /* The build goes in the first line: a log read somewhere else is evidence
+       about a particular version, and one session was spent diagnosing a fault
+       that had already been fixed in a build the phone had not taken yet. */
+    voice.log.push('— אבחון פועל · גרסת אפליקציה ' + APP_VERSION +
+                   '. הקליטו משפט קצר, עצרו, ואז העתיקו את היומן. —');
   }
   renderVoiceLog();
 }

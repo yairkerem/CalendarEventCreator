@@ -9,3 +9,4 @@
 # so taking it out of git here does not lose the ability to roll it back.
 KICKOFF.md
 calendar-backend.gs
+.claude/

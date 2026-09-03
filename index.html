@@ -711,6 +711,7 @@ button{font:inherit;cursor:pointer}
     <input id="p-until" class="date" type="text" readonly inputmode="none"
            placeholder="DD/MM/YYYY" autocomplete="off">
     <p id="p-untillabel" class="datelabel"></p>
+    <p id="until-spread" class="hint muted" hidden></p>
   </div>
 
   <!-- read-only view of the day being written into; hidden entirely on a
@@ -842,7 +843,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 49;
+const APP_VERSION = 50;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -2001,7 +2002,10 @@ function closeDateSheet(keep){
     } else if (sheet.target === 'p-lastday'){
       stampLastday(); markChanges(); validate();
     } else {
-      stampUntil(); validate();
+      stampUntil();
+      noteUntilSpread(spreadUntil());
+      renderBatch();
+      validate();
     }
   }
   sheet.target = null;
@@ -2614,6 +2618,7 @@ function applyMode(){
   $('p-altlist').hidden  = true;
 
   stampDate();
+  noteUntilSpread(0);
   renderSpan();
   markChanges();
   validate();
@@ -3250,6 +3255,39 @@ function renderAlts(){
   }
 }
 
+/* One message describing a season gives every event in it the same last week.
+   The end date is never in the message — it is a default this screen supplies —
+   so choosing one on the first event is a decision about the whole schedule,
+   the same way choosing a name is.
+
+   Only events still ahead are touched: what is already in the calendar is not
+   ours to rewrite, and a skipped event is not going there at all. An event
+   starting after the date chosen is left with its own default, since a series
+   that ends before it begins is not something to write.
+   @returns {number} how many events it reached. */
+function spreadUntil(){
+  const iso = untilISO();
+  if (!iso || !repeatsWeekly()) return 0;
+
+  let spread = 0;
+  for (let i = state.bi + 1; i < state.batch.length; i++){
+    const ev = state.batch[i];
+    if (state.outcomes[i] || !ev || ev.repeat !== 'weekly') continue;
+    if (ev.date && iso < ev.date) continue;
+    state.batch[i] = Object.assign({}, ev, { repeatUntil: iso });
+    spread++;
+  }
+  return spread;
+}
+
+function noteUntilSpread(n){
+  const el = $('until-spread');
+  el.hidden = !n;
+  el.textContent = !n ? ''
+    : n === 1 ? 'תאריך הסיום הוחל גם על האירוע הבא ברשימה.'
+              : 'תאריך הסיום הוחל גם על ' + n + ' האירועים הבאים ברשימה.';
+}
+
 /* Show which fields this edit actually changes on the existing event. */
 /* The "שונה" badge answers "what moved": against the calendar event being
    edited in update mode, and against what the last correction changed
@@ -3365,6 +3403,7 @@ function reset(){
   say('del-msg', '', 'err');
   state.repeat = 'none';
   state.allDay = false;
+  noteUntilSpread(0);
   $('p-lastday').value = '';
   $('p-lastday').classList.remove('bad');
   $('lastday-field').hidden = true;

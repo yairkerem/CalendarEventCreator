@@ -653,7 +653,25 @@ button{font:inherit;cursor:pointer}
     <p id="p-datelabel" class="datelabel"></p>
   </div>
 
-  <div class="row">
+  <!-- Whether this event has a clock at all. A trip or a camp has none, and
+       the chips are here so a misreading can be put right on the screen
+       instead of by rewriting the message. -->
+  <div class="field" id="span-field">
+    <label>משך</label>
+    <div class="attach" style="margin-top:0">
+      <button type="button" id="b-timed" class="chip">שעות</button>
+      <button type="button" id="b-allday" class="chip">כל היום</button>
+    </div>
+  </div>
+
+  <div class="field" id="lastday-field" hidden>
+    <label for="p-lastday">יום אחרון <span class="chg" id="chg-endDate" hidden>שונה</span></label>
+    <input id="p-lastday" class="date" type="text" readonly inputmode="none"
+           placeholder="DD/MM/YYYY" autocomplete="off">
+    <p id="p-lastdaylabel" class="datelabel"></p>
+  </div>
+
+  <div class="row" id="time-row">
     <div class="field">
       <label for="p-start">שעת התחלה <span class="chg" id="chg-start" hidden>שונה</span></label>
       <input id="p-start" class="time" type="text" inputmode="numeric" maxlength="5"
@@ -824,7 +842,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 48;
+const APP_VERSION = 49;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -864,9 +882,11 @@ const HE_SHORT = ['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
 
 const $ = id => document.getElementById(id);
 
-const FIELDS   = ['title','date','start','end','location'];
-const INPUT_OF = { title:'p-title', date:'p-date', start:'p-start', end:'p-end', location:'p-loc' };
-const CHG_OF   = { title:'chg-title', date:'chg-date', start:'chg-start', end:'chg-end', location:'chg-location' };
+const FIELDS   = ['title','date','start','end','location','endDate'];
+const INPUT_OF = { title:'p-title', date:'p-date', start:'p-start', end:'p-end',
+                   location:'p-loc', endDate:'p-lastday' };
+const CHG_OF   = { title:'chg-title', date:'chg-date', start:'chg-start', end:'chg-end',
+                   location:'chg-location', endDate:'chg-endDate' };
 
 /* How many clarifying questions before we stop and ask for a rewrite. Four is
    generous; past that the message is the problem, not the missing detail. */
@@ -884,6 +904,7 @@ const state = {
   overflow:'',     // '' | 'cap' | 'cut' — why the queue is shorter than that
   created:[],      // {title, when} for each one that actually reached the calendar
   repeat:'none',   // 'none' | 'weekly' — what the chips on screen currently say
+  allDay:false,    // a day-long event: no clock, and possibly several days
   amendLog:[],     // [{role,content}] of the corrections typed for THIS event
   amended:[],      // fields the last correction moved, so the badges can say so
   mode:'create',   // 'create' | 'update' | 'delete'
@@ -1686,6 +1707,13 @@ const LRI = '⁦', PDI = '⁩';
 const ltr = s => s ? LRI + s + PDI : s;
 
 function whenText(ev){
+  if (ev.allDay){
+    const last = ev.endDate && ev.endDate !== ev.date ? ev.endDate : '';
+    /* "עד" rather than a dash: a neutral dash between two runs ending in
+       digits is reordered in a Hebrew line. */
+    return last ? heDate(ev.date) + ' עד ' + heDate(last)
+                : heDate(ev.date) + ' · כל היום';
+  }
   const time = [ev.start, ev.end].filter(Boolean).join('–');
   return [heDate(ev.date), ltr(time)].filter(Boolean).join(' · ');
 }
@@ -1968,7 +1996,10 @@ function closeDateSheet(keep){
     el.value = dateShow(sheetISO());
     el.classList.remove('bad');
     if (sheet.target === 'p-date'){
-      stampDate(); stampUntil(); markChanges(); validate(); loadDay(false);
+      stampDate(); stampUntil(); stampLastday(); markChanges(); validate();
+      if (!state.allDay) loadDay(false);
+    } else if (sheet.target === 'p-lastday'){
+      stampLastday(); markChanges(); validate();
     } else {
       stampUntil(); validate();
     }
@@ -1995,6 +2026,7 @@ function dateISOof(el){
 
 function dateISO(){  return dateISOof($('p-date'));  }
 function untilISO(){ return dateISOof($('p-until')); }
+function lastdayISO(){ return dateISOof($('p-lastday')); }
 
 /* Rejects 31/02 and friends: round-tripping through Date only survives a day
    that actually exists, which also settles leap years. */
@@ -2020,7 +2052,10 @@ function dateBlur(el){
    markChanges and submit both compare against backend values, so both need the
    ISO date rather than the DD/MM/YYYY on screen. */
 function fieldValue(f){
-  if (f === 'date') return dateISO();
+  if (f === 'date')    return dateISO();
+  /* Both date fields hold DD/MM/YYYY and every other part of the app speaks
+     ISO, so they convert on the way out like the first one always has. */
+  if (f === 'endDate') return state.allDay ? lastdayISO() : '';
   return $(INPUT_OF[f]).value.trim();
 }
 
@@ -2200,7 +2235,10 @@ function renderBatch(){
 
     /* Both ends of the event, since approving the lot without stepping through
        them means this row is the only place the times are read. */
-    const when = ev.end ? ev.start + '–' + ev.end : ev.start;
+    const when = ev.allDay
+      ? (ev.endDate && ev.endDate !== ev.date
+         ? 'כל היום · ' + dayCount(ev.date, ev.endDate) + ' ימים' : 'כל היום')
+      : (ev.end ? ev.start + '–' + ev.end : ev.start);
     const t = document.createElement('span');
     t.className = 't';
     t.textContent = [dateShow(ev.date).slice(0, 5), when].filter(Boolean).join(' ');
@@ -2292,8 +2330,10 @@ function batchEvent(i){
 
 /** The same bar the create button is held to, applied without a form. */
 function eventReady(ev){
-  return !!(ev.title && /^\d{4}-\d{2}-\d{2}$/.test(ev.date) &&
-            validTime(ev.start) && validTime(ev.end) &&
+  const when = ev.allDay
+    ? (!ev.endDate || ev.endDate >= ev.date)
+    : (validTime(ev.start) && validTime(ev.end));
+  return !!(ev.title && /^\d{4}-\d{2}-\d{2}$/.test(ev.date) && when &&
             (ev.repeat !== 'weekly' || weekCount(ev.date, ev.repeatUntil) >= 1));
 }
 
@@ -2529,6 +2569,17 @@ function applyMode(){
   $('p-start').value = src.start    || '';
   $('p-end').value   = src.end      || '';   // never pre-fill a guess
   forgetTimes();
+
+  /* An update takes its day-long-ness from the calendar unless the message
+     says otherwise: "move the trip to the 15th" mentions no times, and must
+     not quietly turn a school trip into a timed event. Real times in the
+     message are what turns it off. */
+  const timed = validTime(state.event.start) && validTime(state.event.end);
+  state.allDay = upd
+    ? (state.event.allDay ? true : (timed ? false : !!state.match.allDay))
+    : !!src.allDay;
+  $('p-lastday').value = dateShow(src.endDate || '');
+  $('p-lastday').classList.remove('bad');
   $('p-loc').value   = src.location || '';
   $('p-start').classList.remove('bad');      // values from the backend are already HH:mm
   $('p-end').classList.remove('bad');
@@ -2548,7 +2599,7 @@ function applyMode(){
   $('p-loc').classList.toggle('suggest', !!state.event.needsLocation);
 
   /* An edit is always one occurrence, so the series controls stay out of it. */
-  $('repeat-field').hidden = upd;
+  $('repeat-field').hidden = upd || state.allDay;
   state.repeat = (!upd && src.repeat === 'weekly') ? 'weekly' : 'none';
   $('p-until').value = dateShow(src.repeatUntil || '');
   $('p-until').classList.remove('bad');
@@ -2563,10 +2614,70 @@ function applyMode(){
   $('p-altlist').hidden  = true;
 
   stampDate();
+  renderSpan();
   markChanges();
   validate();
   renderDayQuestion();
-  loadDay(false);
+  /* The day view exists to show clashes by the clock, which a day-long event
+     does not have. */
+  if (state.allDay) $('day-field').hidden = true;
+  else loadDay(false);
+}
+
+/* ---- day-long events ------------------------------------------------- */
+/* The clock and the span are alternatives, never both: whichever one this
+   event has is the only one on screen, so there is nothing to fill in that
+   will be ignored. */
+function setSpan(allDay){
+  state.allDay = allDay;
+  if (state.batch[state.bi]) state.batch[state.bi].allDay = allDay;
+  if (allDay) setRepeat('none');       // a trip is not a weekly series
+  renderSpan();
+  markChanges();
+  renderBatch();
+}
+
+function renderSpan(){
+  const all = state.allDay;
+  $('b-timed').className  = 'chip' + (all ? '' : ' on');
+  $('b-allday').className = 'chip' + (all ? ' on' : '');
+
+  $('time-row').hidden      = all;
+  $('time-hint').hidden     = all;
+  $('lastday-field').hidden = !all;
+  if (all){ $('need-end').hidden = true; $('repeat-field').hidden = true; }
+
+  stampLastday();
+  validate();
+}
+
+/* How many days the span covers, said plainly, because "12/11 to 14/11" is
+   three days and reads like two. */
+function stampLastday(){
+  const from = dateISO(), to = lastdayISO();
+  const label = $('p-lastdaylabel');
+  if (!state.allDay || !$('p-lastday').value.trim()){
+    label.textContent = state.allDay ? 'יום אחד. אפשר לבחור יום אחרון מאוחר יותר.' : '';
+    return;
+  }
+  label.textContent = (to && from && to >= from)
+    ? heDate(to) + ' · ' + (dayCount(from, to)) + ' ימים'
+    : 'היום האחרון קודם ליום הראשון.';
+}
+
+function dayCount(from, to){
+  if (!from || !to || to < from) return 0;
+  const a = new Date(from + 'T12:00:00'), b = new Date(to + 'T12:00:00');
+  return Math.round((b - a) / 864e5) + 1;
+}
+
+/* A span is either not given at all — one day — or a real day on or after the
+   first. Anything else is not something to write into a calendar. */
+function spanOK(){
+  if (!state.allDay) return true;
+  if (!$('p-lastday').value.trim()) return true;
+  const to = lastdayISO();
+  return !!to && !!dateISO() && to >= dateISO();
 }
 
 function renderMatch(upd){
@@ -2723,9 +2834,11 @@ function formEvent(){
   return {
     title:    fieldValue('title'),
     date:     fieldValue('date'),
-    start:    fieldValue('start'),
-    end:      fieldValue('end'),
+    start:    state.allDay ? '' : fieldValue('start'),
+    end:      state.allDay ? '' : fieldValue('end'),
     location: fieldValue('location'),
+    allDay:   state.allDay,
+    endDate:  fieldValue('endDate'),
     repeat:      state.repeat,
     repeatUntil: state.repeat === 'weekly' ? untilISO() : ''
   };
@@ -2821,6 +2934,9 @@ function applyAmend(before, ev){
   $('p-start').value = held.start;
   $('p-end').value   = held.end;
   forgetTimes();
+  if (typeof ev.allDay === 'boolean') state.allDay = ev.allDay;
+  $('p-lastday').value = dateShow(held.endDate || '');
+  renderSpan();
   $('p-loc').value   = held.location;
   for (const id of ['p-title','p-date','p-start','p-end','p-loc']) $(id).classList.remove('bad');
 
@@ -3161,12 +3277,15 @@ function createLabel(){
    one — and, for a series, until it also has an end date that is not before
    the event it repeats from. */
 function validate(){
-  const filled = $('p-title').value.trim() && dateISO()
-              && validTime($('p-start').value) && validTime($('p-end').value);
+  const all = state.allDay;
+  const when = all ? spanOK()
+                   : (validTime($('p-start').value) && validTime($('p-end').value));
+  const filled = $('p-title').value.trim() && dateISO() && when;
   const series = !repeatsWeekly() || weekCount(dateISO(), untilISO()) >= 1;
   $('b-create').disabled = !(filled && series);
+  $('p-lastday').classList.toggle('bad', all && !spanOK());
 
-  const flagEnd = !!state.event.needsEnd && !$('p-end').value;
+  const flagEnd = !all && !!state.event.needsEnd && !$('p-end').value;
   $('need-end').hidden = !flagEnd;
   $('end-field').classList.toggle('needs', flagEnd);
 
@@ -3176,18 +3295,21 @@ function validate(){
 async function submit(){
   const upd = state.mode === 'update' && !!state.match;
   const weekly = repeatsWeekly();
+  const all = state.allDay;
   const ev = {
     title:    fieldValue('title'),
     date:     fieldValue('date'),
-    start:    fieldValue('start'),
-    end:      fieldValue('end'),
+    start:    all ? '' : fieldValue('start'),
+    end:      all ? '' : fieldValue('end'),
     location: fieldValue('location'),
+    allDay:   all,
+    endDate:  fieldValue('endDate'),
     needsEnd:   false,
     needsTitle: false,
     needsLocation: false,
     note: (state.event && state.event.note) || '',
-    repeat:      weekly ? 'weekly' : 'none',
-    repeatUntil: weekly ? untilISO() : ''
+    repeat:      weekly && !all ? 'weekly' : 'none',
+    repeatUntil: weekly && !all ? untilISO() : ''
   };
   const payload = upd
     ? { secret:state.secret, action:'update', user:state.user,
@@ -3242,6 +3364,10 @@ function reset(){
   forgetTimes();
   say('del-msg', '', 'err');
   state.repeat = 'none';
+  state.allDay = false;
+  $('p-lastday').value = '';
+  $('p-lastday').classList.remove('bad');
+  $('lastday-field').hidden = true;
   state.amendLog = [];
   state.amended  = [];
   clearAmend();
@@ -3341,6 +3467,9 @@ $('b-all').addEventListener('click', approveAll);
    opens the wheels. */
 $('p-date').addEventListener('click',  () => openDateSheet('p-date',  'תאריך האירוע'));
 $('p-until').addEventListener('click', () => openDateSheet('p-until', 'חוזר עד'));
+$('p-lastday').addEventListener('click', () => openDateSheet('p-lastday', 'היום האחרון'));
+$('b-timed').addEventListener('click',  () => setSpan(false));
+$('b-allday').addEventListener('click', () => setSpan(true));
 $('b-date-ok').addEventListener('click',     () => closeDateSheet(true));
 $('b-date-cancel').addEventListener('click', () => closeDateSheet(false));
 /* tapping the dimmed area outside the panel is a cancel, as it looks like one */

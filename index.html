@@ -824,7 +824,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 47;
+const APP_VERSION = 48;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -2036,6 +2036,35 @@ function validTime(v){ return /^([01]\d|2[0-3]):[0-5]\d$/.test(v || ''); }
    while typing and when completing the shorthand on blur. */
 function hourLen(d){ return d[0] >= '3' ? 1 : 2; }
 
+/* Touching a time means that time is wrong, so the field empties and the next
+   digits are simply the new one — no selecting or clearing what is already
+   there first, which on a phone is several deliberate actions to say something
+   the tap already said.
+
+   Nothing is re-validated on the way in: the create button would flicker to
+   disabled on a tap that changed nothing. */
+function timeFocus(el){
+  el.dataset.prev = el.value;
+  el.value = '';
+}
+
+/* And put it straight back if they typed nothing. Touching a field must never
+   be a way to lose a value — which is the fault we have just spent three
+   rounds removing from the other end of this form. */
+function timeRestore(el){
+  const prev = el.dataset.prev;
+  delete el.dataset.prev;
+  if (prev && !el.value.trim()) el.value = prev;
+}
+
+/* A stash outlives its field if the form is refilled under it — a correction
+   landing, the next event in the queue, a reset — and a later blur would then
+   write a time belonging to an event that is no longer on screen. */
+function forgetTimes(){
+  delete $('p-start').dataset.prev;
+  delete $('p-end').dataset.prev;
+}
+
 /* Digits only; the colon appears on its own once the hour is complete. */
 function timeInput(el){
   const d = el.value.replace(/\D/g, '').slice(0, 4);
@@ -2499,6 +2528,7 @@ function applyMode(){
   $('p-date').value  = dateShow(src.date);
   $('p-start').value = src.start    || '';
   $('p-end').value   = src.end      || '';   // never pre-fill a guess
+  forgetTimes();
   $('p-loc').value   = src.location || '';
   $('p-start').classList.remove('bad');      // values from the backend are already HH:mm
   $('p-end').classList.remove('bad');
@@ -2790,6 +2820,7 @@ function applyAmend(before, ev){
   $('p-date').value  = dateShow(held.date);
   $('p-start').value = held.start;
   $('p-end').value   = held.end;
+  forgetTimes();
   $('p-loc').value   = held.location;
   for (const id of ['p-title','p-date','p-start','p-end','p-loc']) $(id).classList.remove('bad');
 
@@ -3208,6 +3239,7 @@ function reset(){
   state.match  = null;
   state.alts   = [];
   state.armSeries = false;
+  forgetTimes();
   say('del-msg', '', 'err');
   state.repeat = 'none';
   state.amendLog = [];
@@ -3347,10 +3379,14 @@ for (const id of ['p-title','p-date','p-start','p-end','p-loc']){
   });
 }
 
+for (const id of ['p-start','p-end']){
+  $(id).addEventListener('focus', () => timeFocus($(id)));
+}
+
 for (const id of ['p-start','p-end','p-date']){
   $(id).addEventListener('blur', () => {
     if (id === 'p-date'){ dateBlur($(id)); stampUntil(); loadDay(false); }
-    else { timeBlur($(id)); renderDay(); }
+    else { timeRestore($(id)); timeBlur($(id)); renderDay(); }
     markChanges();
     validate();
   });

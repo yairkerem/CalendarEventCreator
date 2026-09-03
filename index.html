@@ -843,7 +843,7 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 50;
+const APP_VERSION = 51;
 
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -2192,6 +2192,10 @@ function loadItem(){
 
   renderBatch();
   applyMode();
+  /* The approve-all label counts what each event will write, and the current
+     one is read off the form — which applyMode has only just filled in. Asking
+     before that measures the event that was on screen a moment ago. */
+  $('all-label').textContent = allLabel();
   /* moving to the next item happens on a screen that is already open, so
      nothing scrolls it back up on its own */
   window.scrollTo(0, 0);
@@ -2390,9 +2394,25 @@ async function approveAll(){
   }
 }
 
+/* How many rows a confirmation actually writes into the calendar. A series is
+   one decision but many entries, which is the whole reason these two buttons
+   have to be told apart: approving five series is not five events, it is often
+   sixty, and the button that does it should say so before it is pressed. */
+function occurrences(ev){
+  return ev.repeat === 'weekly' ? Math.max(1, weekCount(ev.date, ev.repeatUntil)) : 1;
+}
+
 function allLabel(){
-  const left = pendingItems().length;
-  return left > 1 ? 'אישור כל ' + left + ' האירועים' : 'אישור כל האירועים';
+  const items  = pendingItems().map(batchEvent);
+  const n      = items.length;
+  if (n < 2) return 'אישור כל האירועים';
+
+  const series = items.filter(e => e.repeat === 'weekly').length;
+  const rows   = items.reduce((t, e) => t + occurrences(e), 0);
+
+  if (!series)      return 'אישור כל ' + n + ' האירועים';
+  if (series === n) return 'אישור כל ' + n + ' הסדרות · ' + rows + ' מופעים';
+  return 'אישור כל ' + n + ' האירועים · ' + rows + ' מופעים';
 }
 
 /* What a created entry says about itself: the first occurrence, and — for a
@@ -3306,9 +3326,13 @@ function repeatsWeekly(){
   return state.repeat === 'weekly' && !$('repeat-field').hidden;
 }
 
+/* One series, said as one series — and with its size, so it cannot be mistaken
+   for the button beside it that confirms several. */
 function createLabel(){
   if (state.mode === 'update' && state.match) return 'עדכון האירוע';
-  return repeatsWeekly() ? 'יצירת הסדרה' : 'יצירת האירוע';
+  if (!repeatsWeekly()) return 'יצירת האירוע';
+  const n = weekCount(dateISO(), untilISO());
+  return n > 1 ? 'יצירת סדרה אחת · ' + n + ' מופעים' : 'יצירת האירוע';
 }
 
 /* The backend rejects a null end, so the button stays locked until there is

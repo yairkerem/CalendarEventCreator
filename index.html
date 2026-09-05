@@ -452,6 +452,22 @@ button{font:inherit;cursor:pointer}
    "יום חמישי 3.9.2026 16:30–18:00" came out reading 18:00–16:30. */
 .done .when{color:var(--muted);margin:0}
 .madelist{display:flex;flex-direction:column;gap:8px;text-align:start;margin:18px 0 0}
+/* One row per name, eleven swatches each. Google offers a short fixed list,
+   so it is shown as itself rather than hidden behind a dropdown. */
+.colorlist{display:flex;flex-direction:column;gap:12px}
+.colorrow .who{display:block;font-size:.9rem;font-weight:600;margin:0 0 6px}
+.swatches{display:flex;flex-wrap:wrap;gap:8px}
+.swatch{
+  width:30px;height:30px;border-radius:50%;padding:0;
+  border:2px solid transparent; box-shadow:inset 0 0 0 1px rgba(0,0,0,.18);
+}
+.swatch.on{border-color:var(--text)}
+/* The absence of a colour is a choice too, and needs somewhere to be made. */
+.swatch.clear{background:var(--surface);position:relative;overflow:hidden}
+.swatch.clear::after{
+  content:''; position:absolute; left:50%; top:-3px; width:2px; height:34px;
+  background:var(--border); transform:rotate(45deg);
+}
 .madelist .row{display:block;background:var(--surface);border:1px solid var(--border);
   border-radius:10px;padding:10px 12px}
 .madelist b{display:block;font-weight:600;font-size:.95rem;overflow-wrap:anywhere}
@@ -491,6 +507,14 @@ button{font:inherit;cursor:pointer}
     <input id="i-people" type="text" dir="auto" autocomplete="off" enterkeyhint="done"
            placeholder="למשל: דנה, איתי, נועה">
     <p class="hint muted">מופרדים בפסיקים. נשמר במכשיר הזה בלבד ומופיע ככפתורים במסך האישור.</p>
+  </div>
+
+  <div class="field" id="colors-field" hidden>
+    <label>צבע לכל שם</label>
+    <div id="colors-list" class="colorlist"></div>
+    <p class="hint muted">נשמר בשרת ומשותף לכל המכשירים, כדי שאירוע ייצא באותו צבע
+       מכל טלפון. חל על אירועים חדשים; אירועים קיימים שומרים על צבעם.</p>
+    <p id="colors-msg" class="hint" hidden></p>
   </div>
 
   <!-- device-local decoration; never sent anywhere -->
@@ -861,7 +885,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 52;
+const APP_VERSION = 53;
 
 const LS_BACKEND = 'fc.backend';
 const LS_SECRET = 'fc.secret';
@@ -902,6 +926,23 @@ const HE_SHORT = ['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
 
 const $ = id => document.getElementById(id);
 
+/* Google's eleven, with the names it shows in its own interface. The hex
+   values are only for the swatches here; what is stored and sent is the
+   constant name, which is what CalendarApp understands. */
+const EVENT_COLORS = [
+  { key:'PALE_BLUE',  he:'לבנדר',    hex:'#7986cb' },
+  { key:'PALE_GREEN', he:'מרווה',    hex:'#33b679' },
+  { key:'MAUVE',      he:'ענב',      hex:'#8e24aa' },
+  { key:'PALE_RED',   he:'פלמינגו',  hex:'#e67c73' },
+  { key:'YELLOW',     he:'בננה',     hex:'#f6bf26' },
+  { key:'ORANGE',     he:'קלמנטינה', hex:'#f4511e' },
+  { key:'CYAN',       he:'טווס',     hex:'#039be5' },
+  { key:'GRAY',       he:'גרפיט',    hex:'#616161' },
+  { key:'BLUE',       he:'אוכמנית',  hex:'#3f51b5' },
+  { key:'GREEN',      he:'בזיליקום', hex:'#0b8043' },
+  { key:'RED',        he:'עגבנייה',  hex:'#d50000' }
+];
+
 const FIELDS   = ['title','date','start','end','location','endDate'];
 const INPUT_OF = { title:'p-title', date:'p-date', start:'p-start', end:'p-end',
                    location:'p-loc', endDate:'p-lastday' };
@@ -934,6 +975,7 @@ const state = {
   alts:[],         // other candidates the backend offered
   ambiguous:null,  // {weekday,tomorrow,nextWeek} when a bare weekday hit tomorrow
   people:[],       // family names, supplied by the backend on ping
+  colors:{},       // name -> EventColor constant, held by the backend
   history:[],      // [{role,content}] of the current clarification exchange
   setupReturn:null // screen to go back to when setup was opened from the gear
 };
@@ -1020,6 +1062,8 @@ function openSetup(message){
   $('i-secret').value = state.secret;
   $('i-user').value   = state.user;
   $('i-people').value = state.people.join(', ');
+  sayColors('', false);
+  renderColors();
   $('b-setup-cancel').hidden = !state.setupReturn;
   say('setup-msg', message || '', 'err');
   show('setup');
@@ -1069,6 +1113,8 @@ async function connect(){
       try { localStorage.removeItem(LS_PEOPLE_SRC); } catch {}
       setPeople(r.people || [], 'backend');
     }
+    if (r.colors) state.colors = r.colors;
+    renderColors();
     say('setup-msg', 'מחובר ליומן: ' + (r.calendar || '—'), 'ok');
     setTimeout(() => { if ($('s-setup').classList.contains('active')) show('input'); }, 1400);
   } catch (e){
@@ -1092,7 +1138,12 @@ function refreshWho(force){
   if (!force && Date.now() - lastPing < 30000) return;
   lastPing = Date.now();
   api({ secret: state.secret, action: 'ping' }, T_PING)
-    .then(r => { if (r && r.ok){ setWho(r.calendar, r.version); setPeople(r.people || [], 'backend'); } })
+    .then(r => {
+      if (!r || !r.ok) return;
+      setWho(r.calendar, r.version);
+      setPeople(r.people || [], 'backend');
+      if (r.colors) { state.colors = r.colors; renderColors(); }
+    })
     .catch(() => {});                 // a flaky network leaves the header be
 }
 document.addEventListener('visibilitychange', () => refreshWho(false));
@@ -3249,6 +3300,107 @@ function setPerson(name){
   validate();
 }
 
+/* ---- a colour per person ---------------------------------------- */
+/* Which colour belongs to whom is a fact about the calendar rather than about
+   this phone, so it is held by the backend and every device sees the same
+   answer on its next ping. */
+function colorNames(){
+  const seen = {};
+  const out  = [];
+  /* Names the backend still colours but no longer offers are shown too — the
+     row is the only place that pairing can be undone. */
+  state.people.concat(Object.keys(state.colors)).forEach(function (n){
+    const name = String(n || '').trim();
+    if (!name || seen[name]) return;
+    seen[name] = true;
+    out.push(name);
+  });
+  return out;
+}
+
+function renderColors(){
+  const names = colorNames();
+  $('colors-field').hidden = !names.length;
+  if (!names.length) return;
+
+  const box = $('colors-list');
+  box.textContent = '';
+
+  for (const name of names){
+    const row = document.createElement('div');
+    row.className = 'colorrow';
+
+    const who = document.createElement('span');
+    who.className = 'who';
+    who.dir = 'auto';
+    who.textContent = name;
+
+    const strip = document.createElement('div');
+    strip.className = 'swatches';
+
+    const chosen = state.colors[name] || '';
+    for (const c of EVENT_COLORS){
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'swatch' + (chosen === c.key ? ' on' : '');
+      b.style.background = c.hex;
+      b.title = c.he;
+      b.setAttribute('aria-label', name + ' — ' + c.he);
+      b.addEventListener('click', () => pickColor(name, c.key));
+      strip.append(b);
+    }
+
+    const none = document.createElement('button');
+    none.type = 'button';
+    none.className = 'swatch clear' + (chosen ? '' : ' on');
+    none.title = 'ללא צבע';
+    none.setAttribute('aria-label', name + ' — ללא צבע');
+    none.addEventListener('click', () => pickColor(name, ''));
+    strip.append(none);
+
+    row.append(who, strip);
+    box.append(row);
+  }
+}
+
+function pickColor(name, key){
+  if (key) state.colors[name] = key;
+  else delete state.colors[name];
+  renderColors();
+  saveColors();
+}
+
+/* Tapping through a few colours to see which reads best should not be a few
+   round trips, so the writes are collapsed into one. */
+let colorSaveTimer = null;
+function saveColors(){
+  clearTimeout(colorSaveTimer);
+  sayColors('נשמר…', false);
+  colorSaveTimer = setTimeout(async () => {
+    try {
+      const r = await api({ secret: state.secret, action:'colors',
+                            colors: state.colors }, T_PING);
+      if (!r.ok){
+        sayColors(/unknown action/i.test(r.error || '')
+          ? 'צבעים דורשים גרסה חדשה יותר של השרת.' : (r.error || 'השמירה נכשלה.'), true);
+        return;
+      }
+      state.colors = r.colors || {};
+      renderColors();
+      sayColors('הצבעים נשמרו.', false);
+    } catch (e){
+      sayColors(netMessage(e), true);
+    }
+  }, 500);
+}
+
+function sayColors(text, bad){
+  const el = $('colors-msg');
+  el.hidden = !text;
+  el.textContent = text;
+  el.style.color = bad ? 'var(--danger)' : 'var(--muted)';
+}
+
 function renderPeople(){
   const box = $('people');
   box.textContent = '';
@@ -3289,6 +3441,7 @@ function setPeople(list, src){
     localStorage.setItem(LS_PEOPLE_SRC, src);
   } catch {}
   renderPeople();
+  renderColors();          // a name only just added needs a row of its own
 }
 
 function peopleSource(){

@@ -464,7 +464,17 @@ button{font:inherit;cursor:pointer}
 <!-- =========================== SETUP =========================== -->
 <section id="s-setup" class="screen">
   <h1>הגדרה</h1>
-  <p class="lede">הזינו את הסיסמה המשותפת ואת השם שלכם. השם נשמר על המכשיר ומופיע כיוצר האירוע.</p>
+  <p class="lede">הזינו את כתובת השרת של המשפחה, את הסיסמה המשותפת ואת השם שלכם.
+     השם נשמר על המכשיר ומופיע כיוצר האירוע.</p>
+
+  <div class="field">
+    <label for="i-backend">כתובת השרת</label>
+    <input id="i-backend" type="url" dir="ltr" autocomplete="off" autocapitalize="off"
+           autocorrect="off" spellcheck="false" enterkeyhint="next"
+           placeholder="https://script.google.com/macros/s/.../exec">
+    <p class="hint muted">כתובת ה-Web App של Apps Script, מסתיימת ב-‎/exec.
+       כל משפחה מריצה שרת משלה, עם היומן שלה.</p>
+  </div>
 
   <div class="field">
     <label for="i-secret">סיסמה משותפת</label>
@@ -838,13 +848,22 @@ button{font:inherit;cursor:pointer}
    CONFIG — the Apps Script web-app /exec URL.
    Paste it below, then bump CACHE_VERSION in sw.js so phones pick it up.
    ================================================================ */
-const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9Zh5CQesZ8jLyJYsmlNeFxyIGScUcfPXwvJAYJoeBShyrYeh5/exec';
+/* The app itself is shared: one page on GitHub Pages, one place to update,
+   and every household pointing it at a deployment of its own. So the address
+   is a setting on the device rather than a line in this file — which is also
+   what keeps one family's calendar out of another's reach.
+
+   This constant is only a migration: an install from before the setting
+   existed was pointed here, and would otherwise wake up unconfigured. A fresh
+   install is asked for its own address and never sees this one. */
+const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9aOX9Zh5CQesZ8jLyJYsmlNeFxyIGScUcfPXwvJAYJoeBShyrYeh5/exec';
 
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 51;
+const APP_VERSION = 52;
 
+const LS_BACKEND = 'fc.backend';
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
 /* Cached so the name buttons are there on launch instead of waiting for the
@@ -894,6 +913,7 @@ const CHG_OF   = { title:'chg-title', date:'chg-date', start:'chg-start', end:'c
 const MAX_QA = 4;
 
 const state = {
+  backend:'',      // this device's Apps Script Web App URL
   secret:'', user:'',
   image:null,      // {mediaType, data, preview}
   event:{},        // the event on screen — never null, so the proposal helpers
@@ -935,11 +955,16 @@ function say(el, text, kind){
 /* ---- backend -------------------------------------------------- */
 /* Apps Script never answers a CORS preflight, so the content type must stay
    inside the safelist. The body is still JSON — only the header differs. */
-async function api(payload, timeoutMs){
+async function api(payload, timeoutMs, url){
+  /* `url` is passed only while setup is proving an address that is not saved
+     yet: a probe must not leave a bad address behind if it fails. */
+  const target = url || state.backend;
+  if (!target) throw new Error('no-backend');
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(BACKEND_URL, {
+    const res = await fetch(target, {
       method:  'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body:    JSON.stringify(payload),
@@ -955,6 +980,7 @@ async function api(payload, timeoutMs){
 }
 
 function netMessage(err){
+  if (err && err.message === 'no-backend') return 'לא הוגדרה כתובת שרת. פתחו את ההגדרות.';
   if (err && err.name === 'AbortError') return 'הבקשה ארכה זמן רב מדי. נסו שוב.';
   if (err && err.message === 'bad-json') return 'תשובה לא תקינה מהשרת. בדקו את כתובת ה-Web App.';
   return 'אין תקשורת עם השרת. בדקו את חיבור האינטרנט.';
@@ -981,8 +1007,16 @@ function busy(btn, spin, label, on, text){
 }
 
 /* ---- setup ---------------------------------------------------- */
+/* Catches the two addresses that are easy to confuse with the right one: the
+   editor's /edit link, and the /dev URL, which only ever answers to its owner. */
+function looksLikeBackend(url){
+  return /^https:\/\/script\.google\.com\/(a\/macros\/[^\/]+|macros)\/s\/[^\/]+\/exec$/
+    .test(url);
+}
+
 function openSetup(message){
-  state.setupReturn = state.secret && state.user ? 's-input' : null;
+  state.setupReturn = state.backend && state.secret && state.user ? 's-input' : null;
+  $('i-backend').value = state.backend;
   $('i-secret').value = state.secret;
   $('i-user').value   = state.user;
   $('i-people').value = state.people.join(', ');
@@ -994,27 +1028,36 @@ function openSetup(message){
 }
 
 async function connect(){
-  const secret = $('i-secret').value.trim();
-  const user   = $('i-user').value.trim();
-  if (!secret || !user){
-    say('setup-msg', 'יש למלא את שני השדות.', 'err');
+  const backend = $('i-backend').value.trim();
+  const secret  = $('i-secret').value.trim();
+  const user    = $('i-user').value.trim();
+  if (!backend || !secret || !user){
+    say('setup-msg', 'יש למלא את שלושת השדות.', 'err');
+    return;
+  }
+  if (!looksLikeBackend(backend)){
+    say('setup-msg', 'כתובת השרת צריכה להיות כתובת Web App של Apps Script, ' +
+                     'שמסתיימת ב-/exec.', 'err');
     return;
   }
   say('setup-msg', '', 'err');
   busy('b-connect', 'connect-spin', 'connect-label', true, 'בודק…');
   try {
-    const r = await api({ secret, action:'ping' }, T_PING);
+    const r = await api({ secret, action:'ping' }, T_PING, backend);
     if (!r.ok){
       say('setup-msg', isUnauthorized(r.error)
         ? 'הסיסמה המשותפת שגויה.'
         : (r.error || 'הבדיקה נכשלה.'), 'err');
       return;
     }
-    /* only the secret and the display name persist — nothing else */
+    /* only the address, the secret and the display name persist — and only
+       once one answered the other, so a typo is never what gets saved */
+    localStorage.setItem(LS_BACKEND, backend);
     localStorage.setItem(LS_SECRET, secret);
     localStorage.setItem(LS_USER, user);
-    state.secret = secret;
-    state.user   = user;
+    state.backend = backend;
+    state.secret  = secret;
+    state.user    = user;
     setWho(r.calendar, r.version);
 
     /* A typed list is the user's; an empty field hands control back to the
@@ -1201,8 +1244,8 @@ function extendsText(longer, shorter){
  * Fold one transcript into what has been heard so far.
  *
  * The engine on the phone re-transcribes the whole sentence each time and
- * marks every version final: "יובל", then "יובל אימון", then "יובל אימון
- * בניטה". Adding those together is what multiplied the words. A version that
+ * marks every version final: "דנה", then "דנה אימון", then "דנה אימון
+ * בבוקר". Adding those together is what multiplied the words. A version that
  * carries an earlier one further replaces it; a shorter version of what is
  * already held is stale and dropped; only something genuinely new is appended,
  * which is what an engine that sends real segments does instead.
@@ -3737,8 +3780,17 @@ if ('serviceWorker' in navigator){
 }
 
 /* ---- boot ----------------------------------------------------- */
-state.secret = localStorage.getItem(LS_SECRET) || '';
-state.user   = localStorage.getItem(LS_USER)   || '';
+state.backend = localStorage.getItem(LS_BACKEND) || '';
+state.secret  = localStorage.getItem(LS_SECRET)  || '';
+state.user    = localStorage.getItem(LS_USER)    || '';
+
+/* A phone set up before the address was a setting has a secret but no address,
+   and it belongs to the deployment this app used to name. Carrying it into
+   storage keeps that phone working across this update without asking. */
+if (!state.backend && state.secret){
+  state.backend = LEGACY_BACKEND;
+  localStorage.setItem(LS_BACKEND, state.backend);
+}
 try {
   const saved = JSON.parse(localStorage.getItem(LS_BGPOS) || 'null');
   if (saved && isFinite(saved.x) && isFinite(saved.y)){
@@ -3750,7 +3802,7 @@ try {
 try { state.people = JSON.parse(localStorage.getItem(LS_PEOPLE) || '[]'); } catch { state.people = []; }
 if (!Array.isArray(state.people)) state.people = [];
 
-if (state.secret && state.user){
+if (state.backend && state.secret && state.user){
   setWho('');
   show('input');
   $('i-text').focus();

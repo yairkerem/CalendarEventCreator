@@ -1,12 +1,7 @@
 # Deliberately kept out of this public repo.
 #
-# KICKOFF.md names the kids. calendar-backend.gs holds their names and the
-# venues they train at in its config block. Neither is needed for GitHub Pages
-# to serve the app -- Pages only needs index.html, the manifest, the service
-# worker and the icons.
-#
-# The backend still lives in Apps Script, which keeps its own version history,
-# so taking it out of git here does not lose the ability to roll it back.
+# KICKOFF.md names the kids. calendar-backend.gs used to as well, in its config
+# block -- that block now lives in Script Properties, one deployment per
+# household, so the backend itself is tracked here and shared.
 KICKOFF.md
-calendar-backend.gs
 .claude/

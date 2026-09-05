@@ -1438,6 +1438,16 @@ function testSetup() {
   });
   if (orphans.length) Logger.log('note: coloured but not in PEOPLE — ' + orphans.join(', '));
   // all of these should come back as events with a title — never as a question
+  /* v36 smoke-tested name recognition and venue snapping with one hardcoded
+     sentence about one family. Built from this deployment's own configuration
+     it tests the same two things, for whoever is actually running it. */
+  const who = people()[0] || '';
+  const where = venues()[0] || '';
+  if (who || where) {
+    Logger.log(JSON.stringify(parseText(
+      'מחר אימון' + (who ? ' ל' + who : '') + (where ? ' ב' + where : '') + ' 16:00-17:30')));
+  }
+
   Logger.log(JSON.stringify(parseText('מחר יש אימון ב-17:00')));
   Logger.log(JSON.stringify(parseText('אסיפת הורים ביום שלישי ב-20:00')));
   // three events, one per training day — not one event, and not three copies

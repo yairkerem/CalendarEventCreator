@@ -96,11 +96,13 @@ function doPost(e) {
       case 'create': return json(createEvent(req.event, req.user));
       case 'update': return json(updateEvent(req.id, req.scope, req.event, req.user));
       case 'delete': return json(deleteEvent(req.id, req.scope));
+      case 'colors': return json(colorSetting(req.colors));
       case 'ping':   return json({
         ok: true,
         calendar: calendar().getName(),
         version: BACKEND_VERSION,
-        people: people()
+        people: people(),
+        colors: personColor()
       });
       default:       return json({ ok: false, error: 'unknown action' });
     }
@@ -111,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 37;
+const BACKEND_VERSION = 38;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -133,6 +135,42 @@ function json(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/* Which colour belongs to whom is a fact about the calendar, not about a
+ * phone: an event written from one device has to come out the same colour as
+ * one written from another, or the board stops being readable at a glance.
+ * So the app edits it here rather than keeping its own copy, and every device
+ * picks the change up on its next ping.
+ *
+ * Behind the shared secret, like everything else — anyone holding it can
+ * already write events into this calendar, so colouring them is no wider a
+ * power than they had.
+ *
+ * @param {?Object} next name -> EventColor constant name. Omitted to read.
+ */
+function colorSetting(next) {
+  if (next === undefined || next === null) return { ok: true, colors: personColor() };
+  if (typeof next !== 'object' || Array.isArray(next)) {
+    return { ok: false, error: 'colors must be an object' };
+  }
+
+  const clean = {};
+  for (const name in next) {
+    const who = String(name).trim();
+    const color = String(next[name] || '').trim();
+    if (!who || !color) continue;          // dropped entirely = back to no colour
+
+    /* An unknown constant would be stored happily and then silently fail at
+       every write, which is the kind of fault that is noticed a season late. */
+    if (!CalendarApp.EventColor[color]) {
+      return { ok: false, error: 'unknown colour: ' + color };
+    }
+    clean[who] = color;
+  }
+
+  PROPS.setProperty('PERSON_COLOR', JSON.stringify(clean));
+  return { ok: true, colors: clean };
 }
 
 function calendar() {

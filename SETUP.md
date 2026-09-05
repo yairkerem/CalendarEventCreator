@@ -38,7 +38,7 @@ family's shorthand no better than a stranger would. All are JSON except
 | Property | Example |
 |---|---|
 | `PEOPLE` | `["דנה","איתי","נועה"]` — offered as buttons on the confirm screen |
-| `PERSON_COLOR` | `{"דנה":"YELLOW","איתי":"PALE_RED"}` — one colour each, so the shared board is readable at a glance |
+| `PERSON_COLOR` | `{"דנה":"YELLOW","איתי":"PALE_RED"}` — one colour each, so the shared board is readable at a glance. **Easier set from the app**: settings → צבע לכל שם, which writes this property for you |
 | `VENUES` | `["מגרש הדשא","אולם הספורט"]` — the real names of places, so a photographed schedule is matched to them rather than transcribed letter by letter |
 | `TEMPLATES` | free text; `{VENUES}` is replaced by the list above |
 

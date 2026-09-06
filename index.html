@@ -885,7 +885,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 53;
+const APP_VERSION = 54;
 
 const LS_BACKEND = 'fc.backend';
 const LS_SECRET = 'fc.secret';
@@ -976,6 +976,7 @@ const state = {
   ambiguous:null,  // {weekday,tomorrow,nextWeek} when a bare weekday hit tomorrow
   people:[],       // family names, supplied by the backend on ping
   colors:{},       // name -> EventColor constant, held by the backend
+  colorsKnown:false,// whether that map came from the backend or is just empty
   history:[],      // [{role,content}] of the current clarification exchange
   setupReturn:null // screen to go back to when setup was opened from the gear
 };
@@ -1064,6 +1065,7 @@ function openSetup(message){
   $('i-people').value = state.people.join(', ');
   sayColors('', false);
   renderColors();
+  loadColors();
   $('b-setup-cancel').hidden = !state.setupReturn;
   say('setup-msg', message || '', 'err');
   show('setup');
@@ -1113,7 +1115,7 @@ async function connect(){
       try { localStorage.removeItem(LS_PEOPLE_SRC); } catch {}
       setPeople(r.people || [], 'backend');
     }
-    if (r.colors) state.colors = r.colors;
+    if (r.colors) { state.colors = r.colors; state.colorsKnown = true; }
     renderColors();
     say('setup-msg', 'מחובר ליומן: ' + (r.calendar || '—'), 'ok');
     setTimeout(() => { if ($('s-setup').classList.contains('active')) show('input'); }, 1400);
@@ -1142,7 +1144,7 @@ function refreshWho(force){
       if (!r || !r.ok) return;
       setWho(r.calendar, r.version);
       setPeople(r.people || [], 'backend');
-      if (r.colors) { state.colors = r.colors; renderColors(); }
+      if (r.colors) { state.colors = r.colors; state.colorsKnown = true; renderColors(); }
     })
     .catch(() => {});                 // a flaky network leaves the header be
 }
@@ -3318,10 +3320,36 @@ function colorNames(){
   return out;
 }
 
+/* The picker saves the whole map, so it must be sure of the map before it
+   shows one. A device that has not heard a colour map from this backend — its
+   last ping predated the feature, or the backend is older — would otherwise
+   render every name as uncoloured, and a single tap would write that emptiness
+   back over everyone else's colours. So it is read when settings opens, and
+   until it arrives the swatches show what is there but cannot be used. */
+async function loadColors(){
+  if (!state.backend || !state.secret) return;
+  try {
+    const r = await api({ secret: state.secret, action: 'colors' }, T_PING);
+    if (!r.ok){
+      sayColors(/unknown action/i.test(r.error || '')
+        ? 'עריכת צבעים דורשת גרסה חדשה יותר של השרת.'
+        : (r.error || 'לא ניתן לקרוא את הצבעים מהשרת.'), true);
+      return;
+    }
+    state.colors = r.colors || {};
+    state.colorsKnown = true;
+    sayColors('', false);
+    renderColors();
+  } catch (e){
+    sayColors(netMessage(e), true);
+  }
+}
+
 function renderColors(){
   const names = colorNames();
   $('colors-field').hidden = !names.length;
   if (!names.length) return;
+  const known = state.colorsKnown;
 
   const box = $('colors-list');
   box.textContent = '';
@@ -3346,6 +3374,7 @@ function renderColors(){
       b.style.background = c.hex;
       b.title = c.he;
       b.setAttribute('aria-label', name + ' — ' + c.he);
+      b.disabled = !known;
       b.addEventListener('click', () => pickColor(name, c.key));
       strip.append(b);
     }
@@ -3355,6 +3384,7 @@ function renderColors(){
     none.className = 'swatch clear' + (chosen ? '' : ' on');
     none.title = 'ללא צבע';
     none.setAttribute('aria-label', name + ' — ללא צבע');
+    none.disabled = !known;
     none.addEventListener('click', () => pickColor(name, ''));
     strip.append(none);
 
@@ -3364,6 +3394,9 @@ function renderColors(){
 }
 
 function pickColor(name, key){
+  /* Belt and braces: a disabled swatch cannot be clicked, but nothing else
+     stops a stale map being written back. */
+  if (!state.colorsKnown) return;
   if (key) state.colors[name] = key;
   else delete state.colors[name];
   renderColors();

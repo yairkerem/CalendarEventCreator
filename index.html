@@ -329,10 +329,12 @@ input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .batch .row.made .mark{color:var(--ok)}
 
 /* ---- update bar ----------------------------------------------- */
+/* At the top, where a notice about the app itself belongs — the bottom of a
+   phone screen is where the thumb rests and the eye does not go. */
 .updatebar{
   position:fixed;z-index:40;
   inset-inline:max(14px,env(safe-area-inset-left)) max(14px,env(safe-area-inset-right));
-  bottom:max(14px,env(safe-area-inset-bottom));
+  top:max(14px,env(safe-area-inset-top));
   max-width:560px;margin:0 auto;
   display:flex;align-items:center;gap:10px;
   background:var(--surface);border:1px solid var(--border);
@@ -340,6 +342,10 @@ input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 }
 .updatebar span{flex:1;min-width:0;font-size:.9rem}
 .updatebar .chip{flex:0 0 auto}
+/* A fixed bar covers whatever is beneath it, and what is beneath it here is
+   the settings link and the calendar name. The page moves down to make room,
+   and only while the bar is actually up. */
+body.has-update main{padding-top:calc(var(--update-h, 68px) + 12px)}
 
 .altlist{display:flex;flex-direction:column;gap:8px;margin:0 0 16px}
 .alt{width:100%;text-align:start;background:var(--surface);color:var(--text);
@@ -900,7 +906,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 59;
+const APP_VERSION = 60;
 
 const LS_DIAG    = 'fc.diag';
 const LS_BACKEND = 'fc.backend';
@@ -3918,7 +3924,25 @@ for (const id of ['p-start','p-end','p-date']){
 let swReg = null;
 let swReloading = false;
 
-function showUpdateBar(on){ $('update-bar').hidden = !on; }
+function showUpdateBar(on){
+  const bar = $('update-bar');
+  bar.hidden = !on;
+  document.body.classList.toggle('has-update', !!on);
+  if (on) measureUpdateBar();
+  else document.body.style.removeProperty('--update-h');
+}
+
+/* How tall the bar is depends on whether its text wraps beside the button,
+   which depends on the screen width and the reader's font size — so the room
+   made for it underneath is measured rather than picked. The bar and the page
+   share a top inset, so its height is exactly the shortfall. */
+function measureUpdateBar(){
+  const bar = $('update-bar');
+  if (bar.hidden) return;
+  document.body.style.setProperty('--update-h',
+    Math.ceil(bar.getBoundingClientRect().height) + 'px');
+}
+window.addEventListener('resize', measureUpdateBar);   // rotation changes it
 
 function watchInstalling(worker){
   if (!worker) return;

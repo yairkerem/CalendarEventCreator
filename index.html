@@ -885,8 +885,9 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 54;
+const APP_VERSION = 55;
 
+const LS_DIAG    = 'fc.diag';
 const LS_BACKEND = 'fc.backend';
 const LS_SECRET = 'fc.secret';
 const LS_USER   = 'fc.user';
@@ -1281,6 +1282,12 @@ function growText(){
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 const voice = { rec:null, base:"", onDevice:false, engine:"", starting:false,
                 wanted:false, diag:false, log:[], t0:0, session:0 };
+
+/* A fault that happens once in ten dictations cannot be caught by a switch
+   that has to be thrown beforehand — the app is killed and restarted between
+   attempts, and the one time it matters the log is off. So the switch is
+   remembered, and can simply be left on until the fault turns up. */
+try { voice.diag = localStorage.getItem(LS_DIAG) === '1'; } catch {}
 
 function joinSpoken(before, spoken){
   if (!spoken) return before;        // nothing to add, and no space either
@@ -2912,9 +2919,14 @@ function describeResults(e){
   return 'idx=' + e.resultIndex + ' n=' + e.results.length + '  ' + bits.join('  ');
 }
 
+function syncDiagButton(){
+  $('b-voice-diag').textContent = 'אבחון: ' + (voice.diag ? 'פועל' : 'כבוי');
+}
+
 function toggleVoiceDiag(){
   voice.diag = !voice.diag;
-  $('b-voice-diag').textContent = 'אבחון: ' + (voice.diag ? 'פועל' : 'כבוי');
+  try { localStorage.setItem(LS_DIAG, voice.diag ? '1' : '0'); } catch {}
+  syncDiagButton();
   if (voice.diag){
     voice.log = [];
     voice.t0 = Date.now();
@@ -3966,6 +3978,16 @@ if ('serviceWorker' in navigator){
 }
 
 /* ---- boot ----------------------------------------------------- */
+/* Carried over from a previous session: stamp this run so a log spanning two
+   of them cannot be misread as one, and say which build produced it. */
+if (voice.diag){
+  voice.t0 = Date.now();
+  voice.log.push('— אבחון פועל · גרסת אפליקציה ' + APP_VERSION +
+                 '. בצעו את הפעולה שנכשלה, ואז העתיקו את היומן. —');
+  renderVoiceLog();
+}
+syncDiagButton();
+
 state.backend = localStorage.getItem(LS_BACKEND) || '';
 state.secret  = localStorage.getItem(LS_SECRET)  || '';
 state.user    = localStorage.getItem(LS_USER)    || '';

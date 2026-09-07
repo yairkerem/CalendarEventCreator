@@ -556,7 +556,7 @@ button{font:inherit;cursor:pointer}
       <span id="connect-spin" class="spin" hidden></span>
       <span id="connect-label">התחברות ובדיקה</span>
     </button>
-    <button id="b-setup-cancel" class="btn secondary" hidden>ביטול</button>
+    <button id="b-setup-back" class="btn secondary" hidden>חזרה</button>
   </div>
 </section>
 
@@ -885,7 +885,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 55;
+const APP_VERSION = 56;
 
 const LS_DIAG    = 'fc.diag';
 const LS_BACKEND = 'fc.backend';
@@ -975,6 +975,7 @@ const state = {
   match:null,      // the existing event the backend thinks is being edited
   alts:[],         // other candidates the backend offered
   ambiguous:null,  // {weekday,tomorrow,nextWeek} when a bare weekday hit tomorrow
+  board:'', ver:'',// what the header last learned, so it can redraw itself
   people:[],       // family names, supplied by the backend on ping
   colors:{},       // name -> EventColor constant, held by the backend
   colorsKnown:false,// whether that map came from the backend or is just empty
@@ -1051,6 +1052,47 @@ function busy(btn, spin, label, on, text){
 }
 
 /* ---- setup ---------------------------------------------------- */
+/* The way out used to say "ביטול", which is the wrong word twice over: nothing
+   here is undone by leaving — the colours and the diagnostic switch have
+   already been saved — and cancelling is not what someone who opened settings
+   to look at something wants to do.
+
+   It says "חזרה" instead, and to make that honest it keeps the two edits that
+   need nobody's permission: the display name and the names list, both of which
+   live on this device. The address and the secret are not among them. Those
+   replace a working pair, and a working pair should only ever be replaced by
+   one that has been proved against the backend — which is what the button
+   above it is for. */
+function leaveSetup(){
+  const backend = $('i-backend').value.trim();
+  const secret  = $('i-secret').value.trim();
+  if (backend !== state.backend || secret !== state.secret){
+    say('setup-msg', 'הכתובת או הסיסמה שונו. לחצו "התחברות ובדיקה" כדי לשמור אותן, ' +
+                     'או החזירו אותן לקודמות ואז חזרה.', 'err');
+    return;
+  }
+
+  const user = $('i-user').value.trim();
+  if (user && user !== state.user){
+    state.user = user;
+    try { localStorage.setItem(LS_USER, user); } catch {}
+    setWho(state.board, state.ver);
+  }
+
+  const typed = parsePeople($('i-people').value);
+  if (typed.length){
+    setPeople(typed, 'user');
+  } else if (peopleSource() === 'user'){
+    /* Emptying the field hands the list back to the backend rather than
+       leaving this device with none. */
+    try { localStorage.removeItem(LS_PEOPLE_SRC); } catch {}
+    refreshWho(true);
+  }
+
+  say('setup-msg', '', 'err');
+  show('input');
+}
+
 /* Catches the two addresses that are easy to confuse with the right one: the
    editor's /edit link, and the /dev URL, which only ever answers to its owner. */
 function looksLikeBackend(url){
@@ -1067,7 +1109,7 @@ function openSetup(message){
   sayColors('', false);
   renderColors();
   loadColors();
-  $('b-setup-cancel').hidden = !state.setupReturn;
+  $('b-setup-back').hidden = !state.setupReturn;
   say('setup-msg', message || '', 'err');
   show('setup');
   $('i-secret').focus();
@@ -1152,10 +1194,14 @@ function refreshWho(force){
 document.addEventListener('visibilitychange', () => refreshWho(false));
 
 function setWho(board, version){
+  /* Kept so the header can be redrawn when the display name changes, without
+     waiting for the next ping to remind it which calendar it is looking at. */
+  if (board)   state.board = board;
+  if (version) state.ver   = version;
   const parts = [];
   if (state.user) parts.push('נוצר כ־' + state.user);
-  if (board) parts.push('יומן: ' + board);
-  if (version) parts.push('v' + version);
+  if (state.board) parts.push('יומן: ' + state.board);
+  if (state.ver)   parts.push('v' + state.ver);
   $('who').textContent = parts.join(' · ');
 }
 
@@ -3729,7 +3775,7 @@ for (const ev of ['pointerup','pointercancel']){
 window.addEventListener('resize', () => { if (bg.url) applyBgPos(); });
 
 $('b-connect').addEventListener('click', connect);
-$('b-setup-cancel').addEventListener('click', () => show('input'));
+$('b-setup-back').addEventListener('click', leaveSetup);
 $('i-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('i-people').focus(); });
 $('i-people').addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
 

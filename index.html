@@ -900,7 +900,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 58;
+const APP_VERSION = 59;
 
 const LS_DIAG    = 'fc.diag';
 const LS_BACKEND = 'fc.backend';
@@ -942,23 +942,23 @@ const HE_SHORT = ['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
 
 const $ = id => document.getElementById(id);
 
-/* Google's eleven. `en` is the name Google Calendar itself shows, which is
-   what makes a colour here findable there; `he` is kept for the screen reader,
-   since the rest of this app speaks Hebrew. The hex values are only for the
+/* Google's eleven, named exactly as Google Calendar names them. Not
+   translated: the point of the name is that a colour picked here can be found
+   there, and a translation breaks that. The hex values are only for the
    swatches — what is stored and sent is the constant name, which is what
    CalendarApp understands. */
 const EVENT_COLORS = [
-  { key:'PALE_BLUE',  en:'Lavender',  he:'לבנדר',    hex:'#7986cb' },
-  { key:'PALE_GREEN', en:'Sage',      he:'מרווה',    hex:'#33b679' },
-  { key:'MAUVE',      en:'Grape',     he:'ענב',      hex:'#8e24aa' },
-  { key:'PALE_RED',   en:'Flamingo',  he:'פלמינגו',  hex:'#e67c73' },
-  { key:'YELLOW',     en:'Banana',    he:'בננה',     hex:'#f6bf26' },
-  { key:'ORANGE',     en:'Tangerine', he:'קלמנטינה', hex:'#f4511e' },
-  { key:'CYAN',       en:'Peacock',   he:'טווס',     hex:'#039be5' },
-  { key:'GRAY',       en:'Graphite',  he:'גרפיט',    hex:'#616161' },
-  { key:'BLUE',       en:'Blueberry', he:'אוכמנית',  hex:'#3f51b5' },
-  { key:'GREEN',      en:'Basil',     he:'בזיליקום', hex:'#0b8043' },
-  { key:'RED',        en:'Tomato',    he:'עגבנייה',  hex:'#d50000' }
+  { key:'PALE_BLUE',  en:'Lavender',  hex:'#7986cb' },
+  { key:'PALE_GREEN', en:'Sage',      hex:'#33b679' },
+  { key:'MAUVE',      en:'Grape',     hex:'#8e24aa' },
+  { key:'PALE_RED',   en:'Flamingo',  hex:'#e67c73' },
+  { key:'YELLOW',     en:'Banana',    hex:'#f6bf26' },
+  { key:'ORANGE',     en:'Tangerine', hex:'#f4511e' },
+  { key:'CYAN',       en:'Peacock',   hex:'#039be5' },
+  { key:'GRAY',       en:'Graphite',  hex:'#616161' },
+  { key:'BLUE',       en:'Blueberry', hex:'#3f51b5' },
+  { key:'GREEN',      en:'Basil',     hex:'#0b8043' },
+  { key:'RED',        en:'Tomato',    hex:'#d50000' }
 ];
 
 /* Rec. 709 luminance. Only the yellow of the eleven swallows a white tick,
@@ -3467,8 +3467,8 @@ function renderColors(){
       b.className = 'swatch' + (on ? ' on' : '');
       b.style.background = c.hex;
       if (on){ b.textContent = '✓'; b.style.color = tickInk(c.hex); }
-      b.title = c.en;                                   // matches the label above
-      b.setAttribute('aria-label', name + ' — ' + c.he);  // spoken in Hebrew
+      b.title = c.en;
+      b.setAttribute('aria-label', name + ' — ' + c.en);
       b.disabled = !known;
       b.addEventListener('click', () => pickColor(name, c.key));
       strip.append(b);

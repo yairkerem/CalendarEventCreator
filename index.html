@@ -456,12 +456,27 @@ button{font:inherit;cursor:pointer}
    so it is shown as itself rather than hidden behind a dropdown. */
 .colorlist{display:flex;flex-direction:column;gap:12px}
 .colorrow .who{display:block;font-size:.9rem;font-weight:600;margin:0 0 6px}
-.swatches{display:flex;flex-wrap:wrap;gap:8px}
+/* The chosen colour is named as well as ringed. On a small screen, against
+   eleven circles, a word is the only thing that cannot be misread. */
+.colorrow .who .pick{font-weight:400;color:var(--muted)}
+.swatches{display:flex;flex-wrap:wrap;gap:12px}
 .swatch{
-  width:30px;height:30px;border-radius:50%;padding:0;
-  border:2px solid transparent; box-shadow:inset 0 0 0 1px rgba(0,0,0,.18);
+  width:30px;height:30px;border-radius:50%;padding:0;border:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:15px;font-weight:700;line-height:1;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.18);
+  transition:transform .12s ease;
 }
-.swatch.on{border-color:var(--text)}
+/* A ring set off from the swatch by the page's own background, so it reads on
+   a dark circle and a light one alike — a border drawn on the edge of a
+   coloured disc is exactly where it is hardest to see. */
+.swatch.on{
+  transform:scale(1.12);
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.18),
+             0 0 0 3px var(--surface),
+             0 0 0 5px var(--text);
+}
+.swatch:disabled{opacity:.5}
 /* The absence of a colour is a choice too, and needs somewhere to be made. */
 .swatch.clear{background:var(--surface);position:relative;overflow:hidden}
 .swatch.clear::after{
@@ -885,7 +900,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 56;
+const APP_VERSION = 57;
 
 const LS_DIAG    = 'fc.diag';
 const LS_BACKEND = 'fc.backend';
@@ -943,6 +958,14 @@ const EVENT_COLORS = [
   { key:'GREEN',      he:'בזיליקום', hex:'#0b8043' },
   { key:'RED',        he:'עגבנייה',  hex:'#d50000' }
 ];
+
+/* Rec. 709 luminance. Only the yellow of the eleven swallows a white tick,
+   but computing it means a changed palette stays legible by itself. */
+function tickInk(hex){
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 150 ? '#1f2937' : '#fff';
+}
 
 const FIELDS   = ['title','date','start','end','location','endDate'];
 const INPUT_OF = { title:'p-title', date:'p-date', start:'p-start', end:'p-end',
@@ -3416,20 +3439,30 @@ function renderColors(){
     const row = document.createElement('div');
     row.className = 'colorrow';
 
+    const chosen = state.colors[name] || '';
+    const picked = EVENT_COLORS.find(c => c.key === chosen);
+
     const who = document.createElement('span');
     who.className = 'who';
     who.dir = 'auto';
     who.textContent = name;
+    if (known){
+      const tag = document.createElement('span');
+      tag.className = 'pick';
+      tag.textContent = ' · ' + (picked ? picked.he : 'ללא צבע');
+      who.append(tag);
+    }
 
     const strip = document.createElement('div');
     strip.className = 'swatches';
 
-    const chosen = state.colors[name] || '';
     for (const c of EVENT_COLORS){
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'swatch' + (chosen === c.key ? ' on' : '');
+      const on = chosen === c.key;
+      b.className = 'swatch' + (on ? ' on' : '');
       b.style.background = c.hex;
+      if (on){ b.textContent = '✓'; b.style.color = tickInk(c.hex); }
       b.title = c.he;
       b.setAttribute('aria-label', name + ' — ' + c.he);
       b.disabled = !known;

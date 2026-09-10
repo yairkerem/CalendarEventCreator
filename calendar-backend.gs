@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 40;
+const BACKEND_VERSION = 41;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -470,9 +470,10 @@ function parseText(text, file, history) {
     '  intent="update" ולא delete: האירוע עובר, לא נעלם.',
     '- intent="copy" כשמבקשים להעתיק אירועים שכבר קיימים משבוע אחד לאחר:',
     '  "תעתיק את האימונים של השבוע לשבוע הבא". מלא copyFrom ו-copyTo — יום',
-    '  כלשהו בכל אחד מהשבועות, מהטבלאות למעלה — ואת findText כמילת שורש אחת',
-    '  קצרה שמזהה מה להעתיק, למשל "אימון" ולא "האימונים". השאר את findText ריק',
-    '  כדי להעתיק את כל השבוע. אל תמלא events: אינך רואה את היומן, והאפליקציה',
+    '  כלשהו בכל אחד מהשבועות, מהטבלאות למעלה — ואת findText כמילים שמזהות מה',
+    '  להעתיק: שם הפעילות, ואם נאמר שם של אדם אז גם הוא. למשל "אימון יובל".',
+    '  בלי מילות קישור. השאר את findText ריק כדי להעתיק את כל השבוע.',
+    '  אל תמלא events: אינך רואה את היומן, והאפליקציה',
     '  היא שתקרא אותו ותציג את הרשימה לאישור.',
     '- בכל מקרה אחר intent="create", כולל הודעה שמתארת אירוע חדש לגמרי.',
     '- שדות האירוע תמיד מתארים את המצב הסופי הרצוי, לא את השינוי בלבד.',
@@ -811,19 +812,31 @@ function foldHe(text) {
     .trim();
 }
 
-/* Folding gets a root word to its plural — אימונ is inside אימונימ — but not
- * the other way round, and the model is as likely to say "האימונים" as
- * "אימון" whatever it is asked for. So the test runs both ways: the title may
- * contain the needle, or the needle may contain one of the title's own words.
- * Guessing at Hebrew morphology instead would strip the מ off מחוננים.
+/* A request says what to copy and usually whose it is — "האימונים של יובל" —
+ * and both have to hold. Matching on any one of those words was enough to
+ * sweep in every other child's training, which is exactly what it did.
+ *
+ * Each word is tested in both directions, because folding gets a root to its
+ * plural (אימונ is inside אימונימ) but not the reverse, and the model is as
+ * likely to say האימונים as אימון whatever it is asked for. Guessing at
+ * morphology instead would strip the מ off מחוננים.
+ *
+ * Words shorter than three letters are the joins — של, את, עם — and there is
+ * nothing in them to match on.
  * @returns {boolean} whether this title is one the request meant.
  */
 function titleMatches(title, needle) {
   if (!needle) return true;                 // no filter: the whole week
-  const t = foldHe(title);
-  if (t.indexOf(needle) !== -1) return true;
-  return t.split(/\s+/).some(function (w) {
-    return w.length >= 3 && needle.indexOf(w) !== -1;
+  const folded = foldHe(title);
+  const titleWords = folded.split(/\s+/).filter(function (w) { return w.length >= 3; });
+  const wanted = needle.split(/\s+/).filter(function (w) { return w.length >= 3; });
+
+  // nothing substantial to go on: fall back to the phrase as written
+  if (!wanted.length) return folded.indexOf(needle) !== -1;
+
+  return wanted.every(function (w) {
+    if (folded.indexOf(w) !== -1) return true;
+    return titleWords.some(function (tw) { return w.indexOf(tw) !== -1; });
   });
 }
 

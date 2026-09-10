@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 39;
+const BACKEND_VERSION = 40;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -241,7 +241,11 @@ const EVENT_TOOL = {
         type: 'string',
         description: 'שאלה אחת קצרה בעברית. ריק כאשר status=event'
       },
-      intent:     { type: 'string', enum: ['create', 'update', 'delete'] },
+      intent:     { type: 'string', enum: ['create', 'update', 'delete', 'copy'] },
+      copyFrom:   { type: 'string',
+                    description: 'yyyy-MM-dd — יום כלשהו בשבוע שממנו מעתיקים, כאשר intent=copy' },
+      copyTo:     { type: 'string',
+                    description: 'yyyy-MM-dd — יום כלשהו בשבוע שאליו מעתיקים, כאשר intent=copy' },
       findText:   { type: 'string', description: 'מילות זיהוי של האירוע הקיים, כאשר intent=update או intent=delete' },
       findDate:   { type: 'string', description: 'התאריך שבו האירוע קיים כרגע לפני השינוי, בפורמט yyyy-MM-dd' },
       events: {
@@ -464,6 +468,12 @@ function parseText(text, file, history) {
     '  בוטל, מבוטל, לא מתקיים, אין אימון, לא יהיה אימון.',
     '- ביטול שיש לו תחליף — "האימון בוטל, במקוםו אימון בחמישי" — הוא',
     '  intent="update" ולא delete: האירוע עובר, לא נעלם.',
+    '- intent="copy" כשמבקשים להעתיק אירועים שכבר קיימים משבוע אחד לאחר:',
+    '  "תעתיק את האימונים של השבוע לשבוע הבא". מלא copyFrom ו-copyTo — יום',
+    '  כלשהו בכל אחד מהשבועות, מהטבלאות למעלה — ואת findText כמילת שורש אחת',
+    '  קצרה שמזהה מה להעתיק, למשל "אימון" ולא "האימונים". השאר את findText ריק',
+    '  כדי להעתיק את כל השבוע. אל תמלא events: אינך רואה את היומן, והאפליקציה',
+    '  היא שתקרא אותו ותציג את הרשימה לאישור.',
     '- בכל מקרה אחר intent="create", כולל הודעה שמתארת אירוע חדש לגמרי.',
     '- שדות האירוע תמיד מתארים את המצב הסופי הרצוי, לא את השינוי בלבד.',
     '- כאשר intent="update" או intent="delete" מלא גם findText, ו-findDate אם ידוע.',
@@ -570,6 +580,11 @@ function parseText(text, file, history) {
      calendar's own event and the app asks one yes-or-no question. Falling
      back to create, the way an unmatched update does, would answer "cancel
      the training" by adding a training. */
+  /* Like a deletion, this one describes no event to create — the model is
+     told not to invent any — so it is settled before the empty-events guard
+     and before the create branch below. */
+  if (out.intent === 'copy') return copyWeek(out);
+
   if (out.intent === 'delete') {
     const target = findCandidates(
       { text: out.findText || '', date: out.findDate || null }, events[0] || {});
@@ -780,6 +795,36 @@ function amendEvent(current, text, history, source) {
   ev.repeatUntil = current.repeatUntil || '';
 
   return { ok: true, status: 'event', event: ev };
+}
+
+/* Hebrew writes five letters differently at the end of a word, so אימון and
+ * אימונים share no substring at all — ן and נ are simply different characters.
+ * Folding them, along with the invisible direction marks that ride along on
+ * text copied out of a message, is what lets a root word find its own plural.
+ * @returns {string} the same text, comparable.
+ */
+const HE_FINALS = { 'ך':'כ', 'ם':'מ', 'ן':'נ', 'ף':'פ', 'ץ':'צ' };
+function foldHe(text) {
+  return String(text || '')
+    .replace(/[\u200e\u200f\u2066-\u2069\u202a-\u202e]/g, '')
+    .replace(/[ךםןףץ]/g, function (c) { return HE_FINALS[c]; })
+    .trim();
+}
+
+/* Folding gets a root word to its plural — אימונ is inside אימונימ — but not
+ * the other way round, and the model is as likely to say "האימונים" as
+ * "אימון" whatever it is asked for. So the test runs both ways: the title may
+ * contain the needle, or the needle may contain one of the title's own words.
+ * Guessing at Hebrew morphology instead would strip the מ off מחוננים.
+ * @returns {boolean} whether this title is one the request meant.
+ */
+function titleMatches(title, needle) {
+  if (!needle) return true;                 // no filter: the whole week
+  const t = foldHe(title);
+  if (t.indexOf(needle) !== -1) return true;
+  return t.split(/\s+/).some(function (w) {
+    return w.length >= 3 && needle.indexOf(w) !== -1;
+  });
 }
 
 /* A week here runs Sunday to Saturday, and "the whole week of 29/11" names one
@@ -1044,6 +1089,68 @@ function colorFor(title) {
     if (named(name)) return CalendarApp.EventColor[colors[name]] || null;
   }
   return null;
+}
+
+/* One event of the source week, moved by the same number of days as the week
+ * itself, and stripped of everything that belonged to the original: its id,
+ * its series, whoever created it. What comes back is an ordinary new event.
+ */
+function shiftedCopy(c, shift) {
+  return {
+    title:    c.title,
+    date:     plusDays(c.date, shift),
+    start:    c.allDay ? '' : c.start,
+    end:      c.allDay ? null : c.end,
+    location: c.location || '',
+    allDay:   !!c.allDay,
+    endDate:  (c.allDay && isDate(c.endDate)) ? plusDays(c.endDate, shift) : '',
+    needsEnd: false, needsTitle: false, needsLocation: false,
+    note: '', repeat: 'none', repeatUntil: ''
+  };
+}
+
+/* Copying a week is a read of the calendar followed by an ordinary batch of
+ * new events — so the reply is shaped exactly like a parse of a message that
+ * happened to describe them, and the app's existing queue shows them, edits
+ * them and confirms them with nothing new to learn.
+ *
+ * Nothing is written here. Every copy still passes the confirm screen, which
+ * matters more than usual: this is the one request that can propose twenty
+ * events from six words.
+ */
+function copyWeek(out) {
+  if (!isDate(out.copyFrom) || !isDate(out.copyTo)) {
+    return { ok: false, error: 'לא הבנתי מאיזה שבוע ולאיזה שבוע להעתיק.' };
+  }
+
+  const srcSun = sundayOf(out.copyFrom);
+  const dstSun = sundayOf(out.copyTo);
+  const shift  = Math.round(
+    (toDate(dstSun, '12:00').getTime() - toDate(srcSun, '12:00').getTime()) / 864e5);
+  if (!shift) return { ok: false, error: 'שבוע המקור ושבוע היעד הם אותו שבוע.' };
+
+  const needle = foldHe(out.findText);
+  const found = calendar()
+    .getEvents(toDate(srcSun, '00:00'), toDate(plusDays(srcSun, 7), '00:00'))
+    .filter(function (e) { return titleMatches(e.getTitle(), needle); })
+    .map(function (e) { return shiftedCopy(shape(e), shift); });
+
+  if (!found.length) {
+    return { ok: false, error: needle
+      ? 'לא נמצאו אירועים שמתאימים ל"' + out.findText + '" בשבוע שביקשת להעתיק.'
+      : 'לא נמצאו אירועים בשבוע שביקשת להעתיק.' };
+  }
+
+  const events = found.slice(0, MAX_EVENTS);
+  return {
+    ok: true,
+    status: 'event',
+    intent: 'create',          // from here on they are new events like any other
+    events: events,
+    found: found.length,
+    overflow: found.length > MAX_EVENTS ? 'cap' : undefined,
+    event: events[0]
+  };
 }
 
 /* Google takes an exclusive end for an all-day event: one day passes only its

@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 42;
+const BACKEND_VERSION = 43;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -978,8 +978,12 @@ function plusDays(iso, n) {
 
 // ---------- finding the event an edit refers to ----------
 /** Words worth matching on: drops punctuation and one-letter noise. */
+/* Folded before splitting: ן and נ are different characters, so אימון and
+ * אימונים share no word at all until the final letters are levelled. That is
+ * the same trap that made a calendar search for "אימון" find nothing, and it
+ * was still sitting in the matcher that decides which event an edit means. */
 function tokens(s) {
-  return String(s || '')
+  return foldHe(String(s || ''))
     .toLowerCase()
     .split(/[^\u0590-\u05FFa-z0-9]+/)   // keep Hebrew, latin, digits
     .filter(w => w.length > 1);
@@ -991,13 +995,32 @@ function tokens(s) {
  * stay apart. */
 const PARTICLES = 'בלהומשכ';
 
+/* Whether `small` is the opening of `big` — אימונ opens אימונימ. Three letters
+ * is the shortest root worth treating as one, and three of ending is as far as
+ * this reaches; beyond that אימ would open אימונימ.
+ */
+function opens(big, small) {
+  if (big === small) return true;
+  return small.length >= 3 &&
+         big.length >= small.length &&
+         big.length - small.length <= 3 &&
+         big.indexOf(small) === 0;
+}
+
+/* The same word wearing a particle in front, an ending behind, or both at
+ * once: האימונים is אימון in both. Both forms are tried rather than one,
+ * because the particle letters are ordinary letters too — strip מ on the way
+ * in and מחוננים stops being itself.
+ */
+function rootish(big, small) {
+  if (big.length <= small.length) return false;
+  if (opens(big, small)) return true;
+  return PARTICLES.indexOf(big.charAt(0)) !== -1 && opens(big.slice(1), small);
+}
+
 function sameWord(a, b) {
   if (a === b) return true;
-  const big   = a.length > b.length ? a : b;
-  const small = a.length > b.length ? b : a;
-  return big.length - small.length === 1 &&
-         big.slice(1) === small &&
-         PARTICLES.indexOf(big.charAt(0)) !== -1;
+  return rootish(a, b) || rootish(b, a);
 }
 
 /** @returns {number} the fraction of b's words that appear in a. */

@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 41;
+const BACKEND_VERSION = 42;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -207,6 +207,15 @@ const BASE_FIELDS = {
 };
 
 const EVENT_FIELDS = Object.assign({}, BASE_FIELDS, {
+  /* Per event, because one message can revise several — "האימונים של יובל
+     עוברים לשש, והמשחק של אייל נדחה לראשון" is two edits to two entries, and
+     a single findText at the top level can only ever describe one of them.
+     Deliberately not in BASE_FIELDS: a typed correction is about the event
+     already on screen and has nothing to search for. */
+  findText:   { type: 'string',
+                description: 'מילות זיהוי של האירוע הקיים שאותו האירוע הזה מעדכן, כאשר intent=update' },
+  findDate:   { type: 'string',
+                description: 'yyyy-MM-dd — התאריך שבו האירוע הזה קיים כרגע, לפני השינוי' },
   repeat:     { type: 'string', enum: ['none', 'weekly'],
                 description: 'weekly כאשר ההודעה אומרת שהאירוע חוזר כל שבוע. ברירת המחדל none' },
   repeatUntil:{ type: 'string',
@@ -441,7 +450,9 @@ function parseText(text, file, history) {
     '- אם נאמר עד מתי ("עד סוף העונה", "עד דצמבר", "לחודשיים") מלא גם repeatUntil.',
     '  אם לא נאמר — השאר את repeatUntil ריק; המשתמש יבחר את תאריך הסיום.',
     '- אל תמציא אירוע שלא נאמר, ואל תפצל אירוע אחד לשניים.',
-    '- כאשר intent="update" החזר אירוע אחד בלבד.',
+    '- intent="update" יכול לכלול כמה אירועים, כשההודעה מעדכנת כמה אירועים',
+    '  קיימים בבת אחת. לכל אירוע ברשימה מלא findText משלו — ו-findDate אם ידוע —',
+    '  שמזהים את האירוע הקיים שאותו הוא מעדכן.',
     '- פרטים משותפים שנאמרו פעם אחת (מיקום, שם, סוג האימון) חלים על כל',
     '  האירועים ברשימה. מלא אותם בכל אירוע, אל תשאיר אותם רק בראשון.',
     '',
@@ -635,26 +646,47 @@ function parseText(text, file, history) {
     };
   }
 
-  const ev = events[0];
-  const found = findCandidates({ text: out.findText || '', date: out.findDate || null }, ev);
-  if (!found.list.length) {
-    // an update with nothing to update would be a lie — fall back to create
-    ev.note = [ev.note, 'לא נמצא ביומן אירוע קיים שמתאים לעדכון — ייווצר אירוע חדש.']
-      .filter(String).join(' ');
-    return { ok: true, status: 'event', intent: 'create', events: [ev], event: ev,
-             matching: found.report };
-  }
+  /* Each event is matched against the calendar on its own, since each names
+     its own target. The message-level findText remains the fallback for the
+     first of them, which is how a single edit has always arrived. */
+  const searches = events.map(function (ev, i) {
+    return findCandidates({
+      text: ev.findText || (i === 0 ? (out.findText || '') : ''),
+      date: ev.findDate || (i === 0 ? (out.findDate || null) : null)
+    }, ev);
+  });
+
+  events.forEach(function (ev, i) {
+    const hits = searches[i].list;
+    if (hits.length) {
+      ev.match = hits[0];
+      ev.alternatives = hits.slice(1);
+    } else {
+      /* An update with nothing to update would be a lie, so this one becomes
+         an ordinary new event — said out loud, rather than left to be noticed
+         in the calendar afterwards. */
+      ev.note = [ev.note, 'לא נמצא ביומן אירוע קיים שמתאים לעדכון — ייווצר אירוע חדש.']
+        .filter(String).join(' ');
+    }
+  });
+
+  const matched = events.filter(function (ev) { return !!ev.match; });
 
   return {
     ok: true,
     status: 'event',
-    intent: 'update',
-    events: [ev],
-    event: ev,
-    match: found.list[0],
-    alternatives: found.list.slice(1),
-    matching: found.report,
-    ambiguousDay: ev.ambiguousDay || undefined
+    /* Nothing found to update at all is a batch of creates, which is what it
+       has always been. */
+    intent: matched.length ? 'update' : 'create',
+    events: events,
+    event: events[0],
+    found: events.length,
+    /* An app that reads only the top level sees the first event's match — the
+       one thing it could ever act on before several were possible. */
+    match: events[0].match,
+    alternatives: events[0].alternatives || [],
+    matching: searches[0].report,
+    ambiguousDay: events[0].ambiguousDay || undefined
   };
 }
 
@@ -870,6 +902,8 @@ function toEvent(raw) {
   const ev = {
     title:      String(raw.title || '').trim(),
     date:       raw.bareYear ? rollYear(raw.date || '') : (raw.date || ''),
+    findText:   String(raw.findText || '').trim(),
+    findDate:   isDate(raw.findDate) ? raw.findDate : '',
     allDay:     !!raw.allDay,
     /* Inclusive here, and everywhere the app can see. Google's exclusive end is
        computed at the write and nowhere else, so there is one place to get it

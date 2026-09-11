@@ -906,7 +906,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 60;
+const APP_VERSION = 61;
 
 const LS_DIAG    = 'fc.diag';
 const LS_BACKEND = 'fc.backend';
@@ -2325,12 +2325,20 @@ function fillProposal(res){
   /* how many the backend read, and why the queue is shorter if it is */
   state.found    = Number(res.found) || list.length;
   state.overflow = res.overflow || '';
-  state.alts     = Array.isArray(res.alternatives) ? res.alternatives.filter(a => a && a.id) : [];
 
-  /* Same story for `intent`: absent means create, which is what it always was. */
-  const wantsUpdate = res.intent === 'update' && res.match && res.match.id;
-  state.match = wantsUpdate ? res.match : null;
+  /* A message can revise several events at once, and each names its own entry
+     in the calendar — so the match belongs to the event, not to the batch. A
+     backend that sends only the old message-level match still works: it is
+     read onto the first event, which is the only one it could have meant. */
+  if (res.intent === 'update' && res.match && res.match.id && list[0] && !list[0].match){
+    list[0].match = res.match;
+    list[0].alternatives = Array.isArray(res.alternatives) ? res.alternatives : [];
+  }
+  const wantsUpdate = !!(list[0] && list[0].match && list[0].match.id);
+  state.match = wantsUpdate ? list[0].match : null;
   state.mode  = wantsUpdate ? 'update' : 'create';
+  state.alts  = (wantsUpdate && Array.isArray(list[0].alternatives))
+              ? list[0].alternatives.filter(a => a && a.id) : [];
 
   /* The model does not see the calendar; the match is made in the backend
      after it answers. So when the app lands on the wrong event, or on none,
@@ -2353,6 +2361,14 @@ function fillProposal(res){
    approved on its own, which is the rule the whole app is built around. */
 function loadItem(){
   state.event = state.batch[state.bi] || {};
+
+  /* Each item carries its own target, so moving through the queue moves
+     between updates and creations without either leaking into the other. */
+  const mine = state.event.match;
+  state.match = (mine && mine.id) ? mine : null;
+  state.mode  = state.match ? 'update' : 'create';
+  state.alts  = (state.match && Array.isArray(state.event.alternatives))
+              ? state.event.alternatives.filter(a => a && a.id) : [];
 
   /* corrections belong to the event they were typed about */
   state.amendLog = [];
@@ -2433,7 +2449,8 @@ function renderBatch(){
 
     const n = document.createElement('span');
     n.className = 'n';
-    n.textContent = (ev.title || '(ללא כותרת)') + (ev.repeat === 'weekly' ? ' ⟳' : '');
+    n.textContent = (ev.match ? '✎ ' : '') + (ev.title || '(ללא כותרת)') +
+                    (ev.repeat === 'weekly' ? ' ⟳' : '');
 
     row.append(d, t, n);
 
@@ -2537,6 +2554,11 @@ async function approveAll(){
     for (let n = 0; n < todo.length; n++){
       const i  = todo[n];
       const ev = batchEvent(i);
+      /* Each item goes where it belongs: onto the event it named, or into the
+         calendar as a new one. Creating all of them was right only while an
+         update could never be part of a batch. */
+      const onto = state.batch[i] && state.batch[i].match;
+      const edit = !!(onto && onto.id);
 
       /* an event that could not be created on its own is not created here
          either — land on it and let it be finished by hand */
@@ -2546,9 +2568,14 @@ async function approveAll(){
         return;
       }
 
-      $('all-label').textContent = 'יוצר ' + (n + 1) + ' מתוך ' + todo.length + '…';
+      $('all-label').textContent = (edit ? 'מעדכן ' : 'יוצר ') +
+                                   (n + 1) + ' מתוך ' + todo.length + '…';
 
-      const r = await api({ secret:state.secret, action:'create', user:state.user, event:ev }, T_TEXT);
+      const r = await api(edit
+        ? { secret:state.secret, action:'update', user:state.user,
+            id:onto.id, scope:'instance', event:ev }
+        : { secret:state.secret, action:'create', user:state.user, event:ev },
+        T_TEXT);
       if (!r.ok){
         state.bi = i; loadItem();
         failedWith(r.error, 'prop-msg');
@@ -2560,7 +2587,7 @@ async function approveAll(){
       state.created.push({
         title: ev.title,
         when:  r.when || whenText(ev),
-        updated: false,
+        updated: edit,
         count: r.repeat === 'weekly' ? (r.count || 0) : 0
       });
     }
@@ -2583,9 +2610,16 @@ function occurrences(ev){
 }
 
 function allLabel(){
-  const items  = pendingItems().map(batchEvent);
+  const todo   = pendingItems();
+  const items  = todo.map(batchEvent);
   const n      = items.length;
   if (n < 2) return 'אישור כל האירועים';
+
+  /* Updating five events and creating five are not the same act, and the
+     button should not describe them with the same word. */
+  const edits = todo.filter(i => state.batch[i] && state.batch[i].match).length;
+  if (edits === n) return 'עדכון כל ' + n + ' האירועים';
+  if (edits)       return 'אישור כל ' + n + ' האירועים · ' + edits + ' עדכונים';
 
   const series = items.filter(e => e.repeat === 'weekly').length;
   const rows   = items.reduce((t, e) => t + occurrences(e), 0);
@@ -2606,10 +2640,19 @@ function renderDone(){
   const upd  = made.length === 1 && made[0].updated;
   const many = made.length > 1;
 
-  $('d-head').textContent = upd ? 'האירוע עודכן'
-                          : many ? 'נוצרו ' + made.length + ' אירועים'
-                          : made[0] && made[0].count > 1 ? 'הסדרה נוצרה'
-                          : 'האירוע נוצר';
+  /* A batch can hold both kinds now, and saying "created" over a list that
+     was half edits is the sort of small untruth nobody checks. */
+  const edits = made.filter(m => m.updated).length;
+  $('d-head').textContent =
+      upd  ? 'האירוע עודכן'
+    : many ? (edits === made.length ? made.length + ' אירועים עודכנו'
+             : edits ? made.length + ' אירועים: ' + edits +
+                       (edits === 1 ? ' עודכן, ' : ' עודכנו, ') +
+                       (made.length - edits) +
+                       (made.length - edits === 1 ? ' נוצר' : ' נוצרו')
+             : 'נוצרו ' + made.length + ' אירועים')
+    : made[0] && made[0].count > 1 ? 'הסדרה נוצרה'
+    : 'האירוע נוצר';
 
   $('d-title').hidden = many;
   $('d-when').hidden  = many;
@@ -3888,7 +3931,15 @@ $('b-alts').addEventListener('click', () => {
 $('b-tocreate').addEventListener('click', () => {
   state.mode  = 'create';
   state.match = null;
+  state.alts  = [];
+  /* The item has to forget it too, or stepping away and back would put the
+     match straight back on the screen. */
+  if (state.batch[state.bi]){
+    delete state.batch[state.bi].match;
+    delete state.batch[state.bi].alternatives;
+  }
   applyMode();
+  renderBatch();
 });
 
 for (const id of ['p-title','p-date','p-start','p-end','p-loc']){

@@ -303,6 +303,13 @@ input.suggest{border-color:var(--warn);background:var(--warn-bg)}
 .daylist .tag{font-size:.72rem;font-weight:600;color:var(--warn);white-space:nowrap}
 .daylist .row.self .tag{color:var(--accent)}
 .daylist .none{color:var(--muted);font-size:.9rem;padding:2px 0}
+/* While an event is about to be created, every row here is also an offer to
+   edit that one instead — so it has to look pressable without turning the
+   list into a wall of buttons. */
+.daylist button.row{width:100%;text-align:inherit;font:inherit;cursor:pointer}
+.daylist button.row:active{background:var(--surface-2)}
+.daylist .row .pickme{font-size:.72rem;font-weight:600;color:var(--accent);white-space:nowrap}
+.daylist .hint{margin:0 0 8px}
 
 /* ---- several events out of one message ------------------------ */
 /* Deliberately not named .done — that class already styles the result screen
@@ -906,7 +913,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 61;
+const APP_VERSION = 62;
 
 const LS_DIAG    = 'fc.diag';
 const LS_BACKEND = 'fc.backend';
@@ -3303,10 +3310,25 @@ function renderDay(){
 
   const myStart = $('p-start').value, myEnd = $('p-end').value;
   const mine    = state.match && state.match.id;
+  /* Nothing is being edited yet, so every event here is a candidate for it.
+     This is the answer to a match the search got wrong or never found: the
+     calendar's own list of that day, with the right one in it. */
+  const offer = !mine;
+
+  if (offer){
+    const hint = document.createElement('p');
+    hint.className = 'hint muted';
+    hint.textContent = 'אפשר לבחור אירוע קיים מהרשימה כדי לעדכן אותו במקום ליצור חדש.';
+    box.append(hint);
+  }
 
   for (const ev of dayView.events){
-    const row = document.createElement('div');
+    const row = document.createElement(offer && ev.id ? 'button' : 'div');
     row.className = 'row';
+    if (offer && ev.id){
+      row.type = 'button';
+      row.addEventListener('click', () => editInstead(ev));
+    }
 
     const t = document.createElement('span');
     t.className = 't';
@@ -3332,6 +3354,16 @@ function renderDay(){
       tag.className = 'tag';
       tag.textContent = 'חופף';
       row.append(tag);
+    }
+
+    /* Said on every row, including one already marked as overlapping — that
+       one is usually the very event being moved, and is exactly what somebody
+       reading this list wants to point at. */
+    if (offer && ev.id){
+      const pick = document.createElement('span');
+      pick.className = 'pickme';
+      pick.textContent = 'עדכון האירוע הזה';
+      row.append(pick);
     }
 
     box.append(row);
@@ -3679,6 +3711,26 @@ function noteUntilSpread(n){
   el.textContent = !n ? ''
     : n === 1 ? 'תאריך הסיום הוחל גם על האירוע הבא ברשימה.'
               : 'תאריך הסיום הוחל גם על ' + n + ' האירועים הבאים ברשימה.';
+}
+
+/* The search decides which existing event an edit means, and when it decides
+   wrongly there was no way to say so — the only options were to accept a new
+   event or rewrite the message. Pointing at the real one in the day's own list
+   settles it directly, and is also the way back from a match that found
+   nothing at all. */
+function editInstead(existing){
+  const item = state.batch[state.bi];
+  if (!item || !existing || !existing.id) return;
+
+  item.match = existing;
+  item.alternatives = [];
+  /* the note explaining that nothing was found has just been answered */
+  item.note = String(item.note || '')
+    .replace('לא נמצא ביומן אירוע קיים שמתאים לעדכון — ייווצר אירוע חדש.', '')
+    .trim();
+
+  loadItem();          // re-reads the item, so the screen becomes an update
+  say('prop-msg', '', 'err');
 }
 
 /* Show which fields this edit actually changes on the existing event. */

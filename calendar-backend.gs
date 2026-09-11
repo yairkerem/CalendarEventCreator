@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 43;
+const BACKEND_VERSION = 44;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -1105,15 +1105,30 @@ function findCandidates(find, ev) {
   const to   = new Date(base.getTime() + 8 * 864e5);
   const anchorDay = Utilities.formatDate(base, TZ, 'yyyy-MM-dd');
 
+  const noon = toDate(anchorDay, '12:00');
+
   const scored = calendar().getEvents(from, to).map(function (e) {
     const c = shape(e);
-    /* Both directions: "תזיז את האימון של דנה לשלוש" carries eight
-       words for a three-word title, and scoring only how much of the sentence
-       the title covered left every real match near zero — low enough that the
-       day bonus, not the name, decided which event was meant. */
+    /* Both directions: "תזיז את האימון של דנה לשלוש" carries eight words for a
+       three-word title, and scoring only how much of the sentence the title
+       covered left every real match near zero. */
     const t = tokens(c.title);
-    const s = Math.max(overlap(t, needle), overlap(needle, t)) +
-              (c.date === anchorDay ? 0.25 : 0);
+    const name = Math.max(overlap(t, needle), overlap(needle, t));
+
+    /* The name decides, and nothing else can stand in for it. An edit that
+       moves an event to another time has nothing in common with it but what
+       it is called — the old and the new need not even overlap — so an
+       unrelated event that happens to sit on the day named is not a candidate
+       at all. It used to be: a day bonus of 0.25 cleared the bar by itself and
+       could outrank a real match.
+
+       The day, and nearness to it, now only separate candidates the name
+       already fits: a schedule repeats, and the occurrence being moved is the
+       one about to happen rather than the one five weeks out. */
+    const apart = Math.abs(Math.round(
+      (toDate(c.date, '12:00').getTime() - noon.getTime()) / 864e5));
+    const s = name > 0 ? name + (apart === 0 ? 0.05 : 0) - apart * 0.001 : 0;
+
     return { c: c, s: s };
   });
 

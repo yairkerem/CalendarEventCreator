@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 44;
+const BACKEND_VERSION = 45;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -457,8 +457,11 @@ function parseText(text, file, history) {
     '  האירועים ברשימה. מלא אותם בכל אירוע, אל תשאיר אותם רק בראשון.',
     '',
     'מתי לשאול שאלה (status="question"):',
-    '- כמעט אף פעם. רק כאשר אי אפשר לקבוע תאריך או שעת התחלה,',
+    '- כמעט אף פעם. באירוע חדש — רק כאשר אי אפשר לקבוע תאריך או שעת התחלה,',
     '  או כשיש סתירה ממשית בהודעה.',
+    '- בעדכון, בביטול ובהעתקה של אירוע קיים — אל תשאל לעולם על תאריך או על',
+    '  שעת התחלה. לאירוע שביומן כבר יש אותם. מלא רק את מה שההודעה משנה, השאר',
+    '  ריק את כל השאר, והאפליקציה תשלים אותו מהאירוע הקיים.',
     '- שאלה אחת בלבד בכל פעם, קצרה, בעברית.',
     '- אל תשאל על שעת סיום חסרה — החזר status="event" עם end ריק ו-needsEnd=true.',
     '- אל תשאל לעולם למי האירוע או לאיזה ילד הוא שייך. לא כל אירוע קשור לילד:',
@@ -576,8 +579,14 @@ function parseText(text, file, history) {
 
   /* One unusable event is still worth showing — the form lets the user fill in
      what the message left out. Several, and the undated ones are noise between
-     the real ones, so they are dropped rather than queued. */
-  const usable = parsed.length > 1
+     the real ones, so they are dropped rather than queued.
+
+     That is a rule about new events. An edit to something already in the
+     calendar only says what changes — "the trainings move to the other pitch"
+     rightly carries no date and no time for any of them — and dropping those
+     would lose the whole message. */
+  const creating = !out.intent || out.intent === 'create';
+  const usable = (creating && parsed.length > 1)
     ? parsed.filter(function (e) { return e.date && e.start; })
     : parsed;
   const events = usable.slice(0, MAX_EVENTS);
@@ -661,6 +670,13 @@ function parseText(text, file, history) {
     if (hits.length) {
       ev.match = hits[0];
       ev.alternatives = hits.slice(1);
+      /* An edit that never restated the event's name gets the placeholder every
+         blank title gets, and the app would take "אירוע" as the new name and
+         write it over the real one. Emptied, the calendar's own title stands. */
+      if (ev.needsTitle && ev.title === 'אירוע') {
+        ev.title = '';
+        ev.needsTitle = false;
+      }
     } else {
       /* An update with nothing to update would be a lie, so this one becomes
          an ordinary new event — said out loud, rather than left to be noticed

@@ -925,7 +925,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 63;
+const APP_VERSION = 64;
 
 const LS_DIAG    = 'fc.diag';
 const LS_BACKEND = 'fc.backend';
@@ -1308,21 +1308,24 @@ function fileSize(bytes){
  * @param {string=} nameHint  a shared file arrives as a nameless blob, so the
  *                            name travels separately from the service worker
  */
+/* Returns '' once the file is attached, or what went wrong. The pickers ignore
+   it — they show the message, and someone is watching when they do. A share
+   arrives with nobody watching, and its reason has to survive to be reported. */
 async function attach(file, nameHint){
-  if (!file) return;
+  if (!file) return 'לא התקבל קובץ';
 
   const name = file.name || nameHint || '';
   const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(name);
   if (!isPdf && !/^image\//.test(file.type)){
     say('input-msg', 'אפשר לצרף תמונה או קובץ PDF.', 'err');
-    return;
+    return 'הקובץ אינו תמונה (' + (file.type || 'ללא סוג') + ')';
   }
 
   try {
     if (isPdf){
       if (file.size > MAX_PDF){
         say('input-msg', 'הקובץ גדול מדי (מעל 8MB). נסו לסרוק בפחות עמודים.', 'err');
-        return;
+        return 'הקובץ גדול מדי (' + fileSize(file.size) + ')';
       }
       state.file = { mediaType:'application/pdf', data: await toBase64(file), preview:null };
       showAttachment(name || 'סריקה', file.size);
@@ -1336,8 +1339,10 @@ async function attach(file, nameHint){
       showAttachment('', 0, url);
     }
     say('input-msg', '', 'err');
-  } catch {
+    return '';
+  } catch (err) {
     say('input-msg', 'לא הצלחתי לקרוא את הקובץ. נסו קובץ אחר.', 'err');
+    return 'לא ניתן לפענח את הקובץ (' + String(err && err.message || err) + ')';
   }
 }
 
@@ -1616,12 +1621,40 @@ function toggleVoice(){
    parks it in a cache and redirects here. This is the collection end: it takes
    whatever is waiting, hands it to the ordinary attach path, and clears it so
    the same photo cannot arrive twice. */
+/* Written by the service worker for every share: each field that arrived, and
+   whether a file was kept. Kept in step with SHARE_META in sw.js. */
+const SHARE_META = './__shared-meta';
+
+/* Every share leaves a line in the diagnostic: what arrived, what was kept, and
+   what became of it. A photo has three places to go missing between WhatsApp
+   and this screen — never sent, not stored, not readable — and this line is
+   how to tell which one it was. */
+function logShare(got){
+  const r = got.receipt;
+  const pad = '\n        ';
+  logVoice('שיתוף', [
+    'התקבל: ' + (r ? (r.fields.length ? r.fields.join(' | ') : '(כלום)')
+                   : '(אין קבלה מה-service worker)'),
+    'נשמר קובץ: ' + (r && r.stored ? r.stored : 'לא'),
+    'שגיאה: ' + (r && r.error ? r.error : '—'),
+    'צורף: ' + (got.file || 'לא') + (got.failed ? ' — ' + got.failed : ''),
+    'טקסט: ' + (got.text ? 'כן' : 'לא')
+  ].join(pad));
+}
+
 async function takeShared(){
-  const got = { file:'', text:false };      // file is '' | 'image' | 'pdf'
+  const got = { file:'', text:false, failed:'', receipt:null };   // file: '' | 'image' | 'pdf'
   if (!('caches' in window)) return got;
 
   try {
     const cache = await caches.open(SHARE_CACHE);
+
+    /* read first: it explains everything after it */
+    const metaRes = await cache.match(SHARE_META);
+    if (metaRes){
+      try { got.receipt = await metaRes.json(); } catch {}
+      await cache.delete(SHARE_META);
+    }
 
     const textRes = await cache.match(SHARE_TEXT);
     if (textRes){
@@ -1637,22 +1670,35 @@ async function takeShared(){
       try { named = decodeURIComponent(fileRes.headers.get('X-Shared-Name') || ''); } catch {}
       await cache.delete(SHARE_FILE);
       if (blob && blob.size){
-        await attach(blob, named);
+        got.failed = await attach(blob, named);
         if (state.file) got.file = state.file.mediaType === 'application/pdf' ? 'pdf' : 'image';
+      } else {
+        got.failed = 'הקובץ הגיע ריק';
       }
+    } else if (got.receipt && got.receipt.fields.some(f => f.indexOf(': file ') !== -1)){
+      /* The share carried a file and nothing was kept: it arrived empty, or
+         storing it failed. Either way it is not a text-only share. */
+      got.failed = got.receipt.error || 'הקובץ הגיע ריק מהשיתוף';
     }
-  } catch {
-    // a share we cannot read is not worth breaking the boot over
+  } catch (err) {
+    // a share we cannot read is not worth breaking the boot over — but it is worth saying
+    got.failed = got.failed || ('קריאת השיתוף נכשלה (' + String(err && err.message || err) + ')');
   }
+  if (got.receipt || got.text || got.file || got.failed) logShare(got);
   return got;
 }
 
 function sharedMessage(got){
   const what = got.file === 'pdf' ? 'הסריקה' : 'התמונה';
-  if (got.file && got.text) return what + ' והטקסט ששיתפתם נקלטו.';
-  if (got.file)             return what + ' ששיתפתם צורפה.';
-  if (got.text)             return 'ההודעה ששיתפתם הודבקה.';
-  return '';
+  /* A file that arrived and could not be used is said out loud. Announcing the
+     caption as a success over the top of it is what hid a photo going missing:
+     attach() reported the problem, and this message wrote over it. */
+  if (got.failed) return { bad: true, text:
+    (got.text ? 'הטקסט הודבק, אבל ' : '') + 'הקובץ ששיתפתם לא צורף: ' + got.failed + '.' };
+  if (got.file && got.text) return { bad: false, text: what + ' והטקסט ששיתפתם נקלטו.' };
+  if (got.file)             return { bad: false, text: what + ' ששיתפתם צורפה.' };
+  if (got.text)             return { bad: false, text: 'ההודעה ששיתפתם הודבקה.' };
+  return null;
 }
 
 /* ---- background image ----------------------------------------- */
@@ -4321,7 +4367,7 @@ if (state.backend && state.secret && state.user){
      have nowhere to land, and the next launch can still have it. */
   takeShared().then(got => {
     const msg = sharedMessage(got);
-    if (msg) say('input-msg', msg, 'ok');
+    if (msg) say('input-msg', msg.text, msg.bad ? 'err' : 'ok');
     /* a share arrives as ./?shared=1; a reload should not look like one */
     if (location.search) history.replaceState(null, '', location.pathname);
   });

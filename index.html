@@ -361,6 +361,12 @@ body.has-update main{padding-top:calc(var(--update-h, 68px) + 12px)}
 .alt:active{background:var(--surface-2)}
 .alt b{display:block;font-weight:600;font-size:.95rem}
 .alt span{display:block;color:var(--muted);font-size:.85rem}
+/* The first question of an update, asked before anything else on the screen
+   means anything. */
+.choose h3{margin:0 0 4px;font-size:.95rem;font-weight:600}
+.choose .hint{margin:0 0 10px}
+.alt .likely{font-style:normal;font-size:.72rem;font-weight:600;color:var(--accent);
+  margin-inline-start:6px}
 
 /* ---- buttons ------------------------------------------------- */
 button{font:inherit;cursor:pointer}
@@ -673,6 +679,12 @@ button{font:inherit;cursor:pointer}
 
   <div id="p-recurring" class="msg note" hidden></div>
 
+  <div id="p-choose" class="choose" hidden>
+    <h3>איזה אירוע לעדכן?</h3>
+    <p class="hint muted">אלה האירועים ביומן שההודעה נראית מתייחסת אליהם. בחרו את הנכון.</p>
+    <div id="p-chooselist" class="altlist"></div>
+  </div>
+
   <div id="p-current" class="current" hidden>
     <h3>האירוע הקיים ביומן</h3>
     <dl>
@@ -913,7 +925,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 62;
+const APP_VERSION = 63;
 
 const LS_DIAG    = 'fc.diag';
 const LS_BACKEND = 'fc.backend';
@@ -2555,6 +2567,19 @@ function eventReady(ev){
 async function approveAll(){
   const todo = pendingItems();
   say('prop-msg', '', 'err');
+
+  /* The search's best guess is exactly what the choosing step exists to check,
+     so an update nobody has chosen is not approved in bulk. Checked before
+     anything is sent, so the batch never stops half-written on this. */
+  const unchosen = todo.find(i => {
+    const b = state.batch[i];
+    return b && b.match && b.match.id && !b.targetChosen;
+  });
+  if (unchosen !== undefined){
+    state.bi = unchosen; loadItem();
+    say('prop-msg', 'בחרו קודם איזה אירוע מתעדכן, ואז אשרו את כולם.', 'err');
+    return;
+  }
   busy('b-all', 'all-spin', 'all-label', true, 'יוצר…');
 
   try {
@@ -2816,6 +2841,12 @@ function mergeOnto(match, parsed){
 
 function applyMode(){
   const upd = state.mode === 'update' && !!state.match;
+  /* An update is two decisions, taken one at a time. First: which event in the
+     calendar is this about? The search offers what it suspects, and the answer
+     is the user's. Only then does the screen turn to the second question —
+     what the calendar will look like once the event is moved — because the
+     destination day means nothing until it is known what is being moved. */
+  const choosing = upd && !state.event.targetChosen;
   const src = upd ? mergeOnto(state.match, state.event) : state.event;
 
   $('p-title').value = src.title    || '';
@@ -2840,8 +2871,10 @@ function applyMode(){
   $('p-date').classList.remove('bad');
 
   $('p-heading').textContent = upd ? 'עדכון אירוע קיים' : 'אישור אירוע';
-  $('p-lede').textContent = upd
-    ? 'זוהה עדכון לאירוע שכבר קיים ביומן. ודאו שזה האירוע הנכון לפני האישור.'
+  $('p-lede').textContent = choosing
+    ? 'ההודעה מעדכנת אירוע שכבר קיים ביומן. בחרו קודם איזה.'
+    : upd
+    ? 'בדקו את הפרטים החדשים, ואת מה שכבר קיים ביום שאליו האירוע עובר.'
     : 'בדקו את הפרטים לפני היצירה. שום דבר לא נוצר עד לאישור.';
 
   $('need-title').hidden = !state.event.needsTitle;
@@ -2860,11 +2893,15 @@ function applyMode(){
   fillDefaultUntil();
   renderRepeat();
 
-  renderMatch(upd);
+  renderMatch(upd && !choosing);
+  $('p-choose').hidden = !choosing;
+  if (choosing) renderChooser();
   renderAlts();
   renderPeople();
   $('b-tocreate').hidden = !upd;
-  $('b-alts').hidden     = !(upd && state.alts.length);
+  /* nothing to confirm until it is known what is being confirmed */
+  $('b-create').hidden   = choosing;
+  $('b-alts').hidden     = choosing || !(upd && state.alts.length);
   $('p-altlist').hidden  = true;
 
   stampDate();
@@ -2875,8 +2912,57 @@ function applyMode(){
   renderDayQuestion();
   /* The day view exists to show clashes by the clock, which a day-long event
      does not have. */
-  if (state.allDay) $('day-field').hidden = true;
-  else loadDay(false);
+  if (state.allDay || choosing){
+    $('day-field').hidden = true;
+    dayView.seq++;                 // and a list still on its way is not wanted
+  } else {
+    loadDay(false);                // the post-update day, at the post-update time
+  }
+}
+
+/* The suspects, likeliest first — the search's ranking is kept, and said out
+   loud on the one it would have picked. */
+function renderChooser(){
+  const box = $('p-chooselist');
+  box.textContent = '';
+  const item = state.event;
+  const options = [item.match].concat(item.alternatives || [])
+    .filter(c => c && c.id);
+
+  options.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'alt';
+
+    const t = document.createElement('b');
+    t.textContent = c.title || '(ללא כותרת)';
+    if (i === 0 && options.length > 1){
+      const tag = document.createElement('em');
+      tag.className = 'likely';
+      tag.textContent = 'הכי סביר';
+      t.append(tag);
+    }
+
+    const w = document.createElement('span');
+    w.textContent = [whenText(c), c.location].filter(Boolean).join(' · ');
+
+    b.append(t, w);
+    b.addEventListener('click', () => chooseTarget(c));
+    box.append(b);
+  });
+}
+
+/* The ones not chosen stay behind as alternatives, so changing one's mind
+   comes back to the same list rather than to a search that has forgotten. */
+function chooseTarget(c){
+  const item = state.batch[state.bi];
+  if (!item || !c || !c.id) return;
+  const all = [item.match].concat(item.alternatives || []).filter(x => x && x.id);
+  item.match = c;
+  item.alternatives = all.filter(x => x.id !== c.id);
+  item.targetChosen = true;
+  loadItem();
+  say('prop-msg', '', 'err');
 }
 
 /* ---- day-long events ------------------------------------------------- */
@@ -3724,6 +3810,7 @@ function editInstead(existing){
 
   item.match = existing;
   item.alternatives = [];
+  item.targetChosen = true;        // pointed at directly, so already answered
   /* the note explaining that nothing was found has just been answered */
   item.note = String(item.note || '')
     .replace('לא נמצא ביומן אירוע קיים שמתאים לעדכון — ייווצר אירוע חדש.', '')
@@ -3976,7 +4063,10 @@ $('b-back').addEventListener('click', () => show('input'));   // text + image ke
 $('b-again').addEventListener('click', reset);
 
 $('b-alts').addEventListener('click', () => {
-  $('p-altlist').hidden = !$('p-altlist').hidden;
+  /* back to the first question, with every suspect still on offer */
+  const item = state.batch[state.bi];
+  if (item) item.targetChosen = false;
+  loadItem();
 });
 /* the escape hatch when the backend guessed the wrong event, or guessed
    "update" at all: fall back to a plain create with the parsed values */
@@ -3989,6 +4079,7 @@ $('b-tocreate').addEventListener('click', () => {
   if (state.batch[state.bi]){
     delete state.batch[state.bi].match;
     delete state.batch[state.bi].alternatives;
+    delete state.batch[state.bi].targetChosen;
   }
   applyMode();
   renderBatch();

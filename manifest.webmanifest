@@ -21,7 +21,7 @@
       "url": "url",
       "files": [
         { "name": "file", "accept": ["image/*"] },
-        { "name": "pdf",  "accept": ["application/pdf"] }
+        { "name": "pdf",  "accept": ["application/pdf", ".pdf"] }
       ]
     }
   },

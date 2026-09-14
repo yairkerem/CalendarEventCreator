@@ -7,7 +7,7 @@
  * cross-origin POST, and the guard in fetch() below only ever handles
  * same-origin GETs. Responses from the backend never enter the cache.
  */
-const CACHE_VERSION = 'v64';
+const CACHE_VERSION = 'v65';
 const CACHE = 'event-creator-shell-' + CACHE_VERSION;
 
 /* Where a share from another app is parked between the POST that delivers it
@@ -150,6 +150,26 @@ self.addEventListener('fetch', event => {
     event.respondWith(
       caches.match('./index.html').then(hit => hit || fetch(req))
     );
+    return;
+  }
+
+  /* The manifest is what Chrome reads when it rebuilds the installed app, share
+     settings included. Served cache-first, a change to it reached a phone only
+     after a whole app update had come and gone first — so it is fetched fresh,
+     and the cached copy is kept only for when there is no network. */
+  if (url.pathname.endsWith('/manifest.webmanifest')) {
+    event.respondWith((async () => {
+      try {
+        const res = await fetch(req);
+        if (res.ok) {
+          const cache = await caches.open(CACHE);
+          await cache.put('./manifest.webmanifest', res.clone());
+        }
+        return res;
+      } catch (err) {
+        return (await caches.match('./manifest.webmanifest')) || Response.error();
+      }
+    })());
     return;
   }
 

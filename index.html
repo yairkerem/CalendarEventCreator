@@ -623,6 +623,13 @@ button{font:inherit;cursor:pointer}
       <svg class="ic ic-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
       <svg class="ic ic-stop" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg>
     </button>
+    <!-- Last in the row, away from the ways in, so it is not hit by accident.
+         The backspace key rather than a × — the × on the thumbnail already
+         means "remove just this file" — or a bin, which reads as deleting
+         something from the calendar. -->
+    <button type="button" id="b-clear" class="chip icon" aria-label="ניקוי" title="ניקוי והתחלה מחדש">
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 12.59L17.59 17 14 13.41 10.41 17 9 15.59 12.59 12 9 8.41 10.41 7 14 10.59 17.59 7 19 8.41 15.41 12 19 15.59z"/></svg>
+    </button>
   </div>
   <!-- no `capture` on the first input: the OS picker then offers camera *and*
        gallery. The second input is the explicit one-tap camera path. -->
@@ -925,7 +932,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 66;
+const APP_VERSION = 67;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -4081,6 +4088,13 @@ $('b-cam').addEventListener('click',  () => $('f-cam').click());
 $('f-pick').addEventListener('change', e => attach(e.target.files[0]));
 $('f-cam').addEventListener('change',  e => attach(e.target.files[0]));
 $('b-unthumb').addEventListener('click', detach);
+/* A misread message is fastest fixed from a blank slate — and a blank slate
+   means more than the text box. The question the model asked about the
+   misreading, and the answer given to it, travel with every later attempt and
+   would carry the misreading straight into the next one. reset() already
+   clears all of it: text, attachment, that exchange, messages, and dictation
+   if it is running. */
+$('b-clear').addEventListener('click', () => reset());
 
 /* pasting a screenshot straight into the box is the common path */
 $('i-text').addEventListener('paste', e => {

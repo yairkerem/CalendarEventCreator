@@ -567,6 +567,10 @@ button{font:inherit;cursor:pointer}
     <div class="attach" style="margin-top:0">
       <button type="button" id="b-check-update" class="chip">🔄 בדיקת עדכון</button>
     </div>
+    <!-- The answer to "is there an update?" belongs under the question. It used
+         to go to the setup message at the foot of the screen, below the
+         diagnostic log, where a long log pushed it out of sight. -->
+    <div id="update-msg" class="msg ok" style="margin-top:10px" hidden></div>
     <p class="hint muted" id="ver-line"></p>
     <!-- which speech engine the microphone gets, and a way to fetch the
          on-device one when the phone has it available but not installed -->
@@ -929,7 +933,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 68;
+const APP_VERSION = 69;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -1166,6 +1170,7 @@ function openSetup(message){
   loadColors();
   $('b-setup-back').hidden = !state.setupReturn;
   say('setup-msg', message || '', 'err');
+  say('update-msg', '', 'ok');
   show('setup');
   $('i-secret').focus();
   showVoiceEngine();                    // asked each time; a pack can arrive
@@ -4288,10 +4293,10 @@ async function publishedVersion(){
 
 async function checkUpdate(){
   if (!swReg){
-    say('setup-msg', 'עדכונים אינם נתמכים בדפדפן הזה.', 'err');
+    say('update-msg', 'עדכונים אינם נתמכים בדפדפן הזה.', 'err');
     return;
   }
-  say('setup-msg', 'בודק…', 'ok');
+  say('update-msg', 'בודק…', 'ok');
   try {
     /* start listening before asking, or the answer can arrive first */
     const outcome = newWorkerOutcome(swReg, 20000);
@@ -4300,29 +4305,29 @@ async function checkUpdate(){
     switch (await outcome){
       case 'waiting':
         showUpdateBar(true);
-        say('setup-msg', 'נמצאה גרסה חדשה — לחצו על "עדכון".', 'ok');
+        say('update-msg', 'נמצאה גרסה חדשה — לחצו על "עדכון".', 'ok');
         break;
       case 'installing':
-        say('setup-msg', 'מוריד גרסה חדשה… בדקו שוב בעוד רגע.', 'ok');
+        say('update-msg', 'מוריד גרסה חדשה… בדקו שוב בעוד רגע.', 'ok');
         break;
       case 'activated':
-        say('setup-msg', 'הותקנה גרסה חדשה.', 'ok');
+        say('update-msg', 'הותקנה גרסה חדשה.', 'ok');
         break;
       case 'failed':
-        say('setup-msg', 'הורדת הגרסה החדשה נכשלה. נסו שוב, או התקינו מחדש.', 'err');
+        say('update-msg', 'הורדת הגרסה החדשה נכשלה. נסו שוב, או התקינו מחדש.', 'err');
         break;
       default: {
         const live = await publishedVersion();
         if (live && live > APP_VERSION){
-          say('setup-msg', 'קיימת כבר גרסה ' + live + ', אבל הדפדפן עדיין מגיש את ' +
+          say('update-msg', 'קיימת כבר גרסה ' + live + ', אבל הדפדפן עדיין מגיש את ' +
             APP_VERSION + '. זה נפתר מעצמו תוך כעשר דקות — נסו שוב אז.', 'err');
         } else {
-          say('setup-msg', 'האפליקציה מעודכנת (גרסה ' + APP_VERSION + ').', 'ok');
+          say('update-msg', 'האפליקציה מעודכנת (גרסה ' + APP_VERSION + ').', 'ok');
         }
       }
     }
   } catch {
-    say('setup-msg', 'בדיקת העדכון נכשלה. בדקו את החיבור.', 'err');
+    say('update-msg', 'בדיקת העדכון נכשלה. בדקו את החיבור.', 'err');
   }
 }
 

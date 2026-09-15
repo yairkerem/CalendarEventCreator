@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 45;
+const BACKEND_VERSION = 46;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -249,6 +249,11 @@ const EVENT_TOOL = {
       question: {
         type: 'string',
         description: 'שאלה אחת קצרה בעברית. ריק כאשר status=event'
+      },
+      options: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'כשלשאלה יש מספר קטן של תשובות קבועות — 2 עד 4 — התשובות עצמן, כל אחת קצרה. ריק בשאלה פתוחה'
       },
       intent:     { type: 'string', enum: ['create', 'update', 'delete', 'copy'] },
       copyFrom:   { type: 'string',
@@ -457,6 +462,9 @@ function parseText(text, file, history) {
     '  האירועים ברשימה. מלא אותם בכל אירוע, אל תשאיר אותם רק בראשון.',
     '',
     'מתי לשאול שאלה (status="question"):',
+    '- כשלשאלה יש מספר קטן של תשובות קבועות, מלא options בתשובות האלה (2 עד 4),',
+    '  כל אחת קצרה, והמשתמש יבחר בלחיצה במקום להקליד. למשל "אירוע חדש" / "עדכון',
+    '  אירוע קיים". בשאלה פתוחה, כמו "באיזו שעה?", השאר את options ריק.',
     '- כמעט אף פעם. באירוע חדש — רק כאשר אי אפשר לקבוע תאריך או שעת התחלה,',
     '  או כשיש סתירה ממשית בהודעה.',
     '- בעדכון, בביטול ובהעתקה של אירוע קיים — אל תשאל לעולם על תאריך או על',
@@ -570,7 +578,8 @@ function parseText(text, file, history) {
   const out = call.input;
 
   if (out.status === 'question' && out.question) {
-    return { ok: true, status: 'question', question: String(out.question) };
+    return { ok: true, status: 'question', question: String(out.question),
+             options: questionOptions(out.options) };
   }
 
   const parsed = (Array.isArray(out.events) ? out.events : [])
@@ -731,6 +740,11 @@ const AMEND_TOOL = {
       question: {
         type: 'string',
         description: 'שאלה אחת קצרה בעברית. ריק כאשר status=event'
+      },
+      options: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'כשלשאלה יש מספר קטן של תשובות קבועות — 2 עד 4 — התשובות עצמן, כל אחת קצרה. ריק בשאלה פתוחה'
       }
     }, BASE_FIELDS),
     required: ['status']
@@ -819,7 +833,8 @@ function amendEvent(current, text, history, source) {
 
   const out = call.input;
   if (out.status === 'question' && out.question) {
-    return { ok: true, status: 'question', question: String(out.question) };
+    return { ok: true, status: 'question', question: String(out.question),
+             options: questionOptions(out.options) };
   }
 
   const ev = toEvent(out);
@@ -911,6 +926,26 @@ function rollYear(dateStr) {
   // yyyy-MM-dd compares correctly as text, so no date objects are needed
   if (!isDate(dateStr) || dateStr >= today) return dateStr;
   return String(Number(dateStr.slice(0, 4)) + 1) + dateStr.slice(4);
+}
+
+/* A question with a handful of fixed answers is answered with a tap. The model
+ * offers the answers; what reaches the app is checked first, since a button
+ * labelled with a paragraph, a single button, or a dozen of them is worse than
+ * typing. Fewer than two is not a choice, so none are sent.
+ * @returns {string[]} two to four short, distinct answers, or none.
+ */
+function questionOptions(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = {};
+  const list = raw
+    .map(function (o) { return String(o == null ? '' : o).trim(); })
+    .filter(function (o) {
+      if (!o || o.length > 40 || seen[o]) return false;
+      seen[o] = true;
+      return true;
+    })
+    .slice(0, 4);
+  return list.length >= 2 ? list : [];
 }
 
 /** One raw item from the model's `events` array, cleaned into what the app reads. */

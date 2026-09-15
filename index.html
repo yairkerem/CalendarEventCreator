@@ -571,6 +571,8 @@ button{font:inherit;cursor:pointer}
          to go to the setup message at the foot of the screen, below the
          diagnostic log, where a long log pushed it out of sight. -->
     <div id="update-msg" class="msg ok" style="margin-top:10px" hidden></div>
+    <!-- only offered when an update will not take -->
+    <button type="button" id="b-full-refresh" class="chip" style="margin-top:10px" hidden>רענון מלא</button>
     <p class="hint muted" id="ver-line"></p>
     <!-- which speech engine the microphone gets, and a way to fetch the
          on-device one when the phone has it available but not installed -->
@@ -647,6 +649,8 @@ button{font:inherit;cursor:pointer}
        event; the original message stays in the textarea above for context -->
   <div id="qa" class="qa" hidden>
     <div id="qa-log" class="qa-log"></div>
+    <!-- the answers the model offered, when its question has a few fixed ones -->
+    <div id="qa-options" class="attach" style="margin:0 0 12px" hidden></div>
     <div class="field" style="margin-bottom:12px">
       <input id="i-answer" type="text" dir="auto" autocomplete="off"
              enterkeyhint="send" placeholder="התשובה שלך">
@@ -807,6 +811,7 @@ button{font:inherit;cursor:pointer}
        and a wrong date is the usual one. Applies to the event on screen. -->
   <div class="qa" id="amend">
     <div id="amend-log" class="qa-log" hidden></div>
+    <div id="amend-options" class="attach" style="margin:0 0 10px" hidden></div>
     <!-- The label used to read "עדכון הפרטים", which is exactly what someone
          reaches for after editing a field by hand — and it does no such thing.
          The fields above are already live; this box is only for a correction
@@ -933,7 +938,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 69;
+const APP_VERSION = 70;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -1171,6 +1176,7 @@ function openSetup(message){
   $('b-setup-back').hidden = !state.setupReturn;
   say('setup-msg', message || '', 'err');
   say('update-msg', '', 'ok');
+  $('b-full-refresh').hidden = true;
   show('setup');
   $('i-secret').focus();
   showVoiceEngine();                    // asked each time; a pack can arrive
@@ -1860,6 +1866,7 @@ async function turn(text, withImage, ui){
     if (r.status === 'question' && r.question){
       state.history.push({ role:'user',      content: text });
       state.history.push({ role:'assistant', content: r.question });
+      state.qaOptions = Array.isArray(r.options) ? r.options : [];
 
       /* history holds two entries per round, so this counts questions asked */
       if (state.history.length / 2 > MAX_QA){
@@ -1895,6 +1902,8 @@ async function turn(text, withImage, ui){
   } finally {
     busy(ui.btn, ui.spin, ui.label, false, ui.idle);
     $('b-clear').disabled = false;
+    /* a send that failed gets its buttons back; a new question already has them */
+    if (!$('qa').hidden) renderQAOptions();
   }
 }
 
@@ -1941,11 +1950,19 @@ function renderQA(){
   $('i-answer').value = '';
   $('qa').hidden = false;
   $('b-parse').hidden = true;
-  $('i-answer').focus();
+
+  renderQAOptions();
+  const offered = (state.qaOptions || []).length > 0;
+  $('i-answer').placeholder = offered ? 'או כתבו תשובה אחרת' : 'התשובה שלך';
+  /* Focusing the box raises the keyboard, which on a phone covers the very
+     buttons the question came with. Only an open question gets the cursor. */
+  if (!offered) $('i-answer').focus();
 }
 
 function clearQA(){
   state.history = [];
+  state.qaOptions = [];
+  renderQAOptions();
   $('qa-log').textContent = '';
   $('i-answer').value = '';
   $('qa').hidden = true;
@@ -3272,10 +3289,44 @@ function syncAmendButton(){
 }
 
 function clearAmend(){
+  state.amendOptions = [];
+  renderAmendOptions();
   $('i-amend').value = '';
   syncAmendButton();
   $('amend-log').textContent = '';
   $('amend-log').hidden = true;
+}
+
+/* A question with a few fixed answers is answered with a tap, not typed. Each
+   button carries the answer's own words, so what is sent is exactly what the
+   model offered; the text box stays, for when none of them is right. A tap
+   disables the lot, so a slow reply cannot be answered twice. */
+function renderOptions(boxId, options, onPick){
+  const box = $(boxId);
+  box.textContent = '';
+  const list = Array.isArray(options) ? options : [];
+  box.hidden = !list.length;
+  for (const o of list){
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip';
+    b.dir = 'auto';
+    b.textContent = o;
+    b.addEventListener('click', () => {
+      for (const x of box.querySelectorAll('button')) x.disabled = true;
+      onPick(o);
+    });
+    box.append(b);
+  }
+}
+
+function renderQAOptions(){
+  renderOptions('qa-options', state.qaOptions, o => { $('i-answer').value = o; answer(); });
+}
+
+function renderAmendOptions(){
+  renderOptions('amend-options', state.amendOptions,
+    o => { $('i-amend').value = o; syncAmendButton(); amend(); });
 }
 
 function renderAmendLog(){
@@ -3288,6 +3339,7 @@ function renderAmendLog(){
     p.textContent = t.content;
     log.append(p);
   }
+  renderAmendOptions();
 }
 
 async function amend(){
@@ -3318,11 +3370,13 @@ async function amend(){
 
     if (r.status === 'question' && r.question){
       state.amendLog.push({ role:'assistant', content: r.question });
+      state.amendOptions = Array.isArray(r.options) ? r.options : [];
       renderAmendLog();
       $('i-amend').focus();
       return;
     }
 
+    state.amendOptions = [];          // answered: the buttons go with the question
     const changed = applyAmend(before, r.event || {});
     state.amendLog.push({ role:'assistant', content: changed.length
       ? 'עודכן: ' + changed.map(f => LABEL_OF[f]).join(', ')
@@ -3333,6 +3387,7 @@ async function amend(){
   } finally {
     busy('b-amend', 'amend-spin', 'amend-label', false, 'שליחת התיקון');
     syncAmendButton();
+    renderAmendOptions();             // back again if the send failed
   }
 }
 
@@ -4102,6 +4157,7 @@ $('b-unthumb').addEventListener('click', detach);
    clears all of it: text, attachment, that exchange, messages, and dictation
    if it is running. */
 $('b-clear').addEventListener('click', () => reset());
+$('b-full-refresh').addEventListener('click', fullRefresh);
 
 /* pasting a screenshot straight into the box is the common path */
 $('i-text').addEventListener('paste', e => {
@@ -4291,12 +4347,49 @@ async function publishedVersion(){
   }
 }
 
+/* The last resort for an update that will not take. A service worker can get
+   stuck holding an old build — on 2026-09-15 a phone sat on v67 for fourteen
+   hours while v69 was live — and neither waiting nor reopening frees it.
+   Unregistering the worker and dropping the shell cache makes the next load
+   come from the network. Settings live in localStorage, which neither touches.
+
+   Offline, the old worker and its cache are the only way the app opens at all,
+   so nothing is thrown away until the new build is known to be reachable. */
+async function fullRefresh(){
+  const btn = $('b-full-refresh');
+  btn.disabled = true;
+  say('update-msg', 'בודק חיבור…', 'ok');
+  try {
+    const probe = await fetch('index.html?ts=' + Date.now(), { cache: 'no-store' });
+    if (!probe.ok) throw new Error('status ' + probe.status);
+  } catch {
+    btn.disabled = false;
+    say('update-msg', 'אין חיבור לרשת, ולכן הרענון לא בוצע — בלי רשת, העותק השמור ' +
+                      'הוא הדרך היחידה לפתוח את האפליקציה. נסו שוב כשיש חיבור.', 'err');
+    return;
+  }
+  say('update-msg', 'מרענן…', 'ok');
+  try {
+    if ('serviceWorker' in navigator){
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k.indexOf('event-creator-shell-') === 0)
+                          .map(k => caches.delete(k)));
+  } catch {}
+  /* A fresh address, so the browser's own cache cannot hand back the old page;
+     boot strips the query once it is up. */
+  location.replace('./?refresh=' + Date.now());
+}
+
 async function checkUpdate(){
   if (!swReg){
     say('update-msg', 'עדכונים אינם נתמכים בדפדפן הזה.', 'err');
     return;
   }
   say('update-msg', 'בודק…', 'ok');
+  $('b-full-refresh').hidden = true;
   try {
     /* start listening before asking, or the answer can arrive first */
     const outcome = newWorkerOutcome(swReg, 20000);
@@ -4308,19 +4401,27 @@ async function checkUpdate(){
         say('update-msg', 'נמצאה גרסה חדשה — לחצו על "עדכון".', 'ok');
         break;
       case 'installing':
-        say('update-msg', 'מוריד גרסה חדשה… בדקו שוב בעוד רגע.', 'ok');
+        say('update-msg', 'מוריד גרסה חדשה… בדקו שוב בעוד רגע. אם זה חוזר על עצמו, ' +
+                          'רענון מלא יטען אותה ישירות.', 'ok');
+        $('b-full-refresh').hidden = false;
         break;
       case 'activated':
         say('update-msg', 'הותקנה גרסה חדשה.', 'ok');
         break;
       case 'failed':
-        say('update-msg', 'הורדת הגרסה החדשה נכשלה. נסו שוב, או התקינו מחדש.', 'err');
+        say('update-msg', 'הורדת הגרסה החדשה נכשלה. רענון מלא יטען אותה ישירות, ' +
+                          'בלי לאבד הגדרות.', 'err');
+        $('b-full-refresh').hidden = false;
         break;
       default: {
         const live = await publishedVersion();
         if (live && live > APP_VERSION){
+          /* Right after a push this is the CDN and clears by itself; long after,
+             it is a stuck worker, and saying "wait ten minutes" is not true. */
           say('update-msg', 'קיימת כבר גרסה ' + live + ', אבל הדפדפן עדיין מגיש את ' +
-            APP_VERSION + '. זה נפתר מעצמו תוך כעשר דקות — נסו שוב אז.', 'err');
+            APP_VERSION + '. בדקות הראשונות אחרי עדכון זה צפוי. אם זה נמשך, רענון מלא ' +
+            'יטען את הגרסה החדשה וישמור את ההגדרות.', 'err');
+          $('b-full-refresh').hidden = false;
         } else {
           say('update-msg', 'האפליקציה מעודכנת (גרסה ' + APP_VERSION + ').', 'ok');
         }

@@ -943,7 +943,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 71;
+const APP_VERSION = 72;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -1869,6 +1869,10 @@ async function turn(text, withImage, ui){
     if (!r.ok){ failedWith(r.error, 'input-msg'); return; }
 
     if (r.status === 'question' && r.question){
+      /* The one reply that used to leave no trace: a question asked instead of
+         an event is exactly what needs explaining afterwards, and what the
+         model thought it was doing says where the fault is. */
+      logQuestion(r);
       state.history.push({ role:'user',      content: text });
       state.history.push({ role:'assistant', content: r.question });
       state.qaOptions = Array.isArray(r.options) ? r.options : [];
@@ -3221,6 +3225,16 @@ function logReply(res, parsed, match){
     'מהיומן: ' + row(match),
     'למסך:   ' + row(match && parsed ? mergeOnto(match, parsed) : parsed)
   ].join(pad));
+}
+
+/** A question came back instead of an event: what was asked, and on what. */
+function logQuestion(r){
+  const pad = '\n        ';
+  logVoice('שאלה', [
+    'intent=' + (r.intent || '(לא נאמר)') +
+      '  תשובות=' + ((r.options || []).length),
+    'נשאל: ' + JSON.stringify(r.question || '')
+  ].concat((r.options || []).map(function (o){ return '  · ' + o; })).join(pad));
 }
 
 /** What the backend looked for, where, and what it scored. */

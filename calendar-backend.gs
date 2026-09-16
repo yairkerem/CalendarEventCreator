@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 48;
+const BACKEND_VERSION = 49;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -462,9 +462,6 @@ function parseText(text, file, history) {
     '  האירועים ברשימה. מלא אותם בכל אירוע, אל תשאיר אותם רק בראשון.',
     '',
     'מתי לשאול שאלה (status="question"):',
-    '- כשלשאלה יש מספר קטן של תשובות קבועות, מלא options בתשובות האלה (2 עד 4),',
-    '  כל אחת קצרה, והמשתמש יבחר בלחיצה במקום להקליד. למשל "אירוע חדש" / "עדכון',
-    '  אירוע קיים". בשאלה פתוחה, כמו "באיזו שעה?", השאר את options ריק.',
     '- כמעט אף פעם. באירוע חדש — רק כאשר אי אפשר לקבוע תאריך או שעת התחלה,',
     '  או כשיש סתירה ממשית בהודעה.',
     '- בעדכון, בביטול ובהעתקה של אירוע קיים — אל תשאל לעולם על תאריך או על',
@@ -481,6 +478,9 @@ function parseText(text, file, history) {
     '  תמצא את האירוע ותציג למשתמש את ההתאמות אם יש יותר מאחת.',
     '- כשחלק מהאירועים ברורים וחלק לא — אל תשאל. החזר את הברורים,',
     '  והשמט את מה שאי אפשר לתארך או לתזמן.',
+    '- זה כלל על אופן השאלה, לא סיבה לשאול: כששאלה נשאלת בכל זאת ויש לה מספר',
+    '  קטן של תשובות קבועות, מלא options בתשובות האלה (2 עד 4), כל אחת קצרה,',
+    '  והמשתמש יבחר בלחיצה במקום להקליד. בשאלה פתוחה השאר את options ריק.',
     '',
     'כללי intent:',
     '- intent="update" רק אם ההודעה מתייחסת לאירוע שכבר קיים ביומן: שינוי שעה,',
@@ -579,7 +579,10 @@ function parseText(text, file, history) {
 
   if (out.status === 'question' && out.question) {
     return { ok: true, status: 'question', question: String(out.question),
-             options: questionOptions(out.options) };
+             options: questionOptions(out.options),
+             /* for the diagnostic log: whether the message was read as an
+                edit at all, which decides where a wrong question comes from */
+             intent: out.intent || 'create' };
   }
 
   const parsed = (Array.isArray(out.events) ? out.events : [])
@@ -835,7 +838,10 @@ function amendEvent(current, text, history, source) {
   const out = call.input;
   if (out.status === 'question' && out.question) {
     return { ok: true, status: 'question', question: String(out.question),
-             options: questionOptions(out.options) };
+             options: questionOptions(out.options),
+             /* for the diagnostic log: whether the message was read as an
+                edit at all, which decides where a wrong question comes from */
+             intent: out.intent || 'create' };
   }
 
   const ev = toEvent(out);

@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 50;
+const BACKEND_VERSION = 51;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -495,8 +495,13 @@ function parseText(text, file, history) {
     '  ולא מודיע על אירוע חדש. אותו דבר ב"האימון של איתי מחר יהיה בבריכה".',
     '- אירוע חדש כמעט תמיד נאמר עם שעת התחלה. כשאין בהודעה שעת התחלה והיא',
     '  מדברת על פעילות שנשמעת קבועה — זה עדכון, לא אירוע חדש ולא שאלה. החזר',
-    '  intent="update" עם findText והשאר את start ריק; האפליקציה תחפש את',
+    '  intent="update", מלא findText, והשאר את start ריק; האפליקציה תחפש את',
     '  האירוע ביומן ותשלים ממנו את השעה.',
+    '- בעדכון תמיד מלא גם events: אירוע אחד לכל אירוע קיים שמשתנה, ובו רק מה',
+    '  שההודעה משנה — למשל location בלבד — וכל השאר ריק. findText אומר איזה',
+    '  אירוע ביומן, ו-events אומר מה משתנה בו; בלי events אין מה לעדכן.',
+    '  רק ב-delete וב-copy לא ממלאים events כלל. למשל "האימון של איתי היום',
+    '  בבריכה": findText="אימון איתי", events=[{location:"בריכה"}].',
     '- intent="delete" כאשר ההודעה אומרת שאירוע קיים מבוטל ואין לו תחליף:',
     '  בוטל, מבוטל, לא מתקיים, אין אימון, לא יהיה אימון.',
     '- ביטול שיש לו תחליף — "האימון בוטל, במקוםו אימון בחמישי" — הוא',
@@ -643,6 +648,18 @@ function parseText(text, file, history) {
       alternatives: target.list.slice(1),
       matching: target.report
     };
+  }
+
+  /* An edit that named its target and described no change: findText filled,
+     `events` empty — which is exactly what a copy is told to return, and the
+     nearest wrong answer to the rule above. The message was understood, so it
+     is not thrown away: the search terms become a bare event, the calendar
+     fills the rest, and the screen says the change has to be made by hand. */
+  if (!events.length && out.intent === 'update' && (out.findText || out.findDate)) {
+    const bare = toEvent({ findText: out.findText || '', findDate: out.findDate || '' });
+    bare.notice = 'ההודעה זוהתה כעדכון של אירוע קיים, אבל לא היה בה מה לשנות. ' +
+                  'בדקו את הפרטים ועדכנו ידנית.';
+    events.push(bare);
   }
 
   if (!events.length) {

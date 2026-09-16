@@ -943,7 +943,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 72;
+const APP_VERSION = 73;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -2485,7 +2485,7 @@ function loadItem(){
   const amb = state.event.ambiguousDay;
   state.ambiguous = (amb && amb.tomorrow && amb.nextWeek) ? amb : null;
 
-  say('p-note', (state.event.note || '').trim(), 'note');
+  say('p-note', screenNote(state.event), 'note');
   say('prop-msg', '', 'err');
 
   /* every item re-reads its day: the calendar may have moved on, and the
@@ -3471,7 +3471,7 @@ function applyAmend(before, ev){
 
   const amb = ev.ambiguousDay;
   state.ambiguous = (amb && amb.tomorrow && amb.nextWeek) ? amb : null;
-  say('p-note', (ev.note || '').trim(), 'note');
+  say('p-note', screenNote(ev), 'note');
 
   stampDate(); stampUntil(); markChanges(); validate();
   renderDayQuestion(); renderBatch(); loadDay(false);
@@ -3983,13 +3983,23 @@ function editInstead(existing){
   item.match = existing;
   item.alternatives = [];
   item.targetChosen = true;        // pointed at directly, so already answered
-  /* the note explaining that nothing was found has just been answered */
-  item.note = String(item.note || '')
+  /* the notice explaining that nothing was found has just been answered */
+  item.notice = '';
+  item.note = String(item.note || '')      // an older backend said it in `note`
     .replace('לא נמצא ביומן אירוע קיים שמתאים לעדכון — ייווצר אירוע חדש.', '')
     .trim();
 
   loadItem();          // re-reads the item, so the screen becomes an update
   say('prop-msg', '', 'err');
+}
+
+/* What the screen says about an event, which is not what the calendar gets:
+   `notice` is the backend talking to the user — "nothing matched, this will be
+   created" — while `note` is the event's own description. An older backend has
+   only the one field, and said both things through it. */
+function screenNote(ev){
+  if (!ev) return '';
+  return String(ev.notice || ev.note || '').trim();
 }
 
 /* Show which fields this edit actually changes on the existing event. */

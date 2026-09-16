@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 49;
+const BACKEND_VERSION = 50;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -464,6 +464,8 @@ function parseText(text, file, history) {
     'מתי לשאול שאלה (status="question"):',
     '- כמעט אף פעם. באירוע חדש — רק כאשר אי אפשר לקבוע תאריך או שעת התחלה,',
     '  או כשיש סתירה ממשית בהודעה.',
+    '- אל תשאל על שעת התחלה של פעילות שנשמעת קיימת ("האימון", "החוג") רק',
+    '  משום שלא נאמרה שעה. אין שעה = זה לא אירוע חדש. החזר intent="update".',
     '- בעדכון, בביטול ובהעתקה של אירוע קיים — אל תשאל לעולם על תאריך או על',
     '  שעת התחלה. לאירוע שביומן כבר יש אותם. מלא רק את מה שההודעה משנה, השאר',
     '  ריק את כל השאר, והאפליקציה תשלים אותו מהאירוע הקיים.',
@@ -486,6 +488,15 @@ function parseText(text, file, history) {
     '- intent="update" רק אם ההודעה מתייחסת לאירוע שכבר קיים ביומן: שינוי שעה,',
     '  דחייה, הקדמה, העברה למגרש אחר, ביטול והחלפה. מילים אופייניות: הועבר, נדחה,',
     '  הוקדם, שונה, במקום, עבר ל, לא ב... אלא ב...',
+    '- גם בלי מילת שינוי מפורשת: הודעה על פעילות מוכרת בה"א הידיעה — "האימון",',
+    '  "החוג", "המפגש", "השיעור" — יחד עם יום או תאריך, היא עדכון של אירוע קיים.',
+    '  "האימון של יובל היום בקאנטרי" = intent="update", findText="אימון יובל",',
+    '  location="קאנטרי", start ריק. הכותב מספר מה השתנה בפעילות שכבר ביומן,',
+    '  ולא מודיע על אירוע חדש. אותו דבר ב"האימון של יובל מחר יהיה בקאנטרי".',
+    '- אירוע חדש כמעט תמיד נאמר עם שעת התחלה. כשאין בהודעה שעת התחלה והיא',
+    '  מדברת על פעילות שנשמעת קבועה — זה עדכון, לא אירוע חדש ולא שאלה. החזר',
+    '  intent="update" עם findText והשאר את start ריק; האפליקציה תחפש את',
+    '  האירוע ביומן ותשלים ממנו את השעה.',
     '- intent="delete" כאשר ההודעה אומרת שאירוע קיים מבוטל ואין לו תחליף:',
     '  בוטל, מבוטל, לא מתקיים, אין אימון, לא יהיה אימון.',
     '- ביטול שיש לו תחליף — "האימון בוטל, במקוםו אימון בחמישי" — הוא',
@@ -693,9 +704,10 @@ function parseText(text, file, history) {
     } else {
       /* An update with nothing to update would be a lie, so this one becomes
          an ordinary new event — said out loud, rather than left to be noticed
-         in the calendar afterwards. */
-      ev.note = [ev.note, 'לא נמצא ביומן אירוע קיים שמתאים לעדכון — ייווצר אירוע חדש.']
-        .filter(String).join(' ');
+         in the calendar afterwards. It travels beside the note rather than
+         inside it: `note` is the event's own description, and a sentence about
+         the search has no business being written into the calendar. */
+      ev.notice = 'לא נמצא ביומן אירוע קיים שמתאים לעדכון — ייווצר אירוע חדש.';
     }
   });
 

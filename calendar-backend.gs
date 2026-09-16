@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 47;
+const BACKEND_VERSION = 48;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -686,6 +686,7 @@ function parseText(text, file, history) {
         ev.title = '';
         ev.needsTitle = false;
       }
+      keepFoundName(ev);
     } else {
       /* An update with nothing to update would be a lie, so this one becomes
          an ordinary new event — said out loud, rather than left to be noticed
@@ -873,6 +874,79 @@ function foldHe(text) {
     .replace(/[\u200e\u200f\u2066-\u2069\u202a-\u202e]/g, '')
     .replace(/[ךםןףץ]/g, function (c) { return HE_FINALS[c]; })
     .trim();
+}
+
+/** Every name this board knows: the buttons' list, plus anyone with a colour. */
+function knownPeople() {
+  const seen = {};
+  const list = [];
+  const add = function (n) {
+    const name = String(n || '').trim();
+    if (!name || seen[name]) return;
+    seen[name] = true;
+    list.push(name);
+  };
+  people().forEach(add);
+  const colors = personColor();
+  for (const name in colors) add(name);
+  return list;
+}
+
+/* The "דנה - " that says whose event it is: the app's name buttons write it and
+ * the colour rule reads it, which is why losing it costs more than a few
+ * characters of title.
+ * @returns {string} the prefix with its separator, spelled as configured, or ''
+ */
+function personTag(title) {
+  const raw = String(title || '');
+  const folded = foldHe(raw);
+  const names = knownPeople();
+  for (const name of names) {
+    if (raw.indexOf(name + ' - ') === 0 ||
+        folded.indexOf(foldHe(name) + ' - ') === 0) return name + ' - ';
+  }
+  return '';
+}
+
+/* An edit is not a rename. "החוג של דנה עובר ל-17:00" says the name so the
+ * event can be found, and a model asked for a title will duly answer "חוג" —
+ * which then lands on top of "דנה - חוג ריקוד" in the calendar, taking both the
+ * real name and the prefix the colour is read from with it.
+ *
+ * So a title that only says again what was found is dropped, and the calendar's
+ * own name stands; the app treats an empty field as "leave this alone", the
+ * same way an unusable time is treated. Only what the found title does not
+ * already contain counts as a new name.
+ *
+ * A real rename still goes through, and only gets back the prefix it forgot: a
+ * new name that already names somebody is left exactly as it came, since moving
+ * an event from one child to another is a rename like any other.
+ */
+function keepFoundName(ev) {
+  const have = String((ev.match && ev.match.title) || '');
+  const want = String(ev.title || '');
+  if (!have || !want) return;
+
+  /* Whose event it is counts as a name: "החוג של דנה עובר לאיתי" keeps every
+     other word, and is still a rename. */
+  const tagHave = personTag(have);
+  const tagWant = personTag(want);
+  if (tagWant && tagWant !== tagHave) return;
+
+  const bare = function (t) { return t.slice(personTag(t).length).trim(); };
+  const found = bare(have);
+  const asked = bare(want);
+
+  if (titleMatches(found, foldHe(asked))) {
+    ev.title = '';
+    ev.needsTitle = false;
+    return;
+  }
+
+  /* A separator already in the new name means it carries a prefix of its own —
+     someone this board has never been told about — and two prefixes read worse
+     than the wrong one. */
+  if (tagHave && !tagWant && want.indexOf(' - ') === -1) ev.title = tagHave + want;
 }
 
 /* A request says what to copy and usually whose it is — "האימונים של איתי" —

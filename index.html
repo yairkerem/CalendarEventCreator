@@ -943,7 +943,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 73;
+const APP_VERSION = 74;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -1864,9 +1864,18 @@ async function turn(text, withImage, ui){
   if (useImage) payload.file = { mediaType: state.file.mediaType, data: state.file.data };
   if (state.history.length) payload.history = state.history.slice();
 
+  logVoice('שליחה', 'action=' + payload.action +
+                     '  תווים=' + String(text || '').length +
+                     (useImage ? '  + תמונה' : ''));
   try {
     const r = await api(payload, useImage ? T_IMAGE : T_TEXT);
-    if (!r.ok){ failedWith(r.error, 'input-msg'); return; }
+    if (!r.ok){
+      /* A refusal used to leave the log silent, which read exactly like a
+         message that was never sent at all. */
+      logVoice('נדחה', JSON.stringify(r.error || '(בלי הסבר)'));
+      failedWith(r.error, 'input-msg');
+      return;
+    }
 
     if (r.status === 'question' && r.question){
       /* The one reply that used to leave no trace: a question asked instead of
@@ -1893,6 +1902,7 @@ async function turn(text, withImage, ui){
        the proposal screen would offer to create the very event the message
        asked to call off. */
     if (r.status === 'nomatch'){
+      logVoice('תשובה', 'intent=' + (r.intent || 'delete') + '  לא נמצא אירוע לביטול');
       if (r.matching) logMatch(r.matching, null);
       say('input-msg', 'לא נמצא ביומן אירוע שמתאים לביטול. נסו לנסח מי ומתי.', 'err');
       return;
@@ -1907,6 +1917,7 @@ async function turn(text, withImage, ui){
     fillProposal(r);
     show('prop');
   } catch (e){
+    logVoice('כשל', netMessage(e) + '  · ' + ((e && e.message) || e));
     say('input-msg', netMessage(e), 'err');
   } finally {
     busy(ui.btn, ui.spin, ui.label, false, ui.idle);

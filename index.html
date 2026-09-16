@@ -943,7 +943,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 74;
+const APP_VERSION = 75;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -1402,8 +1402,13 @@ function growText(){
    language, and a device in English would otherwise transcribe nonsense.
    The button only exists where the browser can actually listen. */
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+/* `spoken` is the box exactly as the last dictation left it, and `replaced`
+   is what a re-dictation set aside. Together they answer the only question the
+   microphone has to ask when it starts: is the text in the box something this
+   button put there, or something the user wrote? */
 const voice = { rec:null, base:"", onDevice:false, engine:"", starting:false,
-                wanted:false, diag:false, log:[], t0:0, session:0 };
+                wanted:false, diag:false, log:[], t0:0, session:0,
+                spoken:"", replaced:"" };
 
 /* A fault that happens once in ten dictations cannot be caught by a switch
    that has to be thrown beforehand — the app is killed and restarted between
@@ -1499,7 +1504,17 @@ async function startVoice(){
   /* recorded here so a copied log answers "where was the audio processed"
      without anyone having to go and look in settings */
   logVoice("engine", voice.engine + (voice.onDevice ? "  -> ON-DEVICE" : "  -> SERVER"));
-  voice.base = $('i-text').value;
+  /* Dictating twice is how a sentence gets said better, not how two sentences
+     get written: saying it again replaces what the microphone wrote last time.
+     Anything the user typed or edited by hand is theirs, so that gets added to
+     instead — which is what every dictation used to do, and what made a reworded
+     sentence come back doubled. */
+  const box = $('i-text').value;
+  const replacing = !!box && box === voice.spoken;
+  voice.base = replacing ? '' : box;
+  voice.replaced = replacing ? box : '';
+  logVoice('בסיס', replacing ? 'החלפה של הכתבה קודמת' : 'המשך למה שכבר בתיבה');
+
   voice.wanted = true;                  // cleared by stopping, or by any error
   voice.session = 1;
 
@@ -1562,6 +1577,17 @@ async function startVoice(){
         logVoice('restart failed', String(err && err.name || err));
       }
     }
+    /* Dictation is over for good here, so the box is now "what the microphone
+       wrote" — until the user touches it. A session that heard nothing at all
+       gives back the text it replaced, rather than leaving an empty box where
+       a sentence used to be. */
+    if (voice.replaced && !$('i-text').value.trim()){
+      $('i-text').value = voice.replaced;
+      growText();
+      logVoice('שוחזר', 'ההכתבה החדשה היתה ריקה — הוחזר הטקסט הקודם');
+    }
+    voice.spoken = $('i-text').value;
+    voice.replaced = '';
     voice.rec = null;
     setRecording(false);
   };
@@ -1569,6 +1595,9 @@ async function startVoice(){
   try {
     rec.start();
     voice.rec = rec;                    // now it is genuinely listening
+    /* emptied only once the engine is really listening: a recogniser that
+       refused to start must not cost the user the sentence in the box */
+    if (replacing){ $('i-text').value = ''; growText(); }
     setRecording(true);
     say('input-msg', '', 'err');
     $('i-text').blur();                 // the keyboard is only in the way now
@@ -4139,6 +4168,8 @@ async function submit(scope){
 
 function reset(){
   stopVoice();
+  voice.spoken = '';                    // nothing of the microphone's is left
+  voice.replaced = '';
   $('i-text').value = '';
   growText();
   detach();

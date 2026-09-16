@@ -832,6 +832,11 @@ button{font:inherit;cursor:pointer}
       <span id="create-spin" class="spin" hidden></span>
       <span id="create-label">יצירת האירוע</span>
     </button>
+    <!-- shown only while editing an event that repeats -->
+    <button id="b-create-series" class="btn secondary" hidden>
+      <span id="series-spin" class="spin" hidden></span>
+      <span id="series-label">עדכון כל הסדרה</span>
+    </button>
     <button id="b-all" class="btn secondary" hidden>
       <span id="all-spin" class="spin" hidden></span>
       <span id="all-label">אישור כל האירועים</span>
@@ -938,7 +943,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 70;
+const APP_VERSION = 71;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -2742,6 +2747,7 @@ function allLabel(){
 /* What a created entry says about itself: the first occurrence, and — for a
    series — how many follow it. */
 function madeWhen(m){
+  if (m.scope === 'series') return m.when + ' · כל הסדרה';
   return m.count > 1 ? m.when + ' · כל שבוע, ' + m.count + ' מופעים' : m.when;
 }
 
@@ -2754,7 +2760,7 @@ function renderDone(){
      was half edits is the sort of small untruth nobody checks. */
   const edits = made.filter(m => m.updated).length;
   $('d-head').textContent =
-      upd  ? 'האירוע עודכן'
+      upd  ? (made[0].scope === 'series' ? 'הסדרה עודכנה' : 'האירוע עודכן')
     : many ? (edits === made.length ? made.length + ' אירועים עודכנו'
              : edits ? made.length + ' אירועים: ' + edits +
                        (edits === 1 ? ' עודכן, ' : ' עודכנו, ') +
@@ -2963,7 +2969,7 @@ function applyMode(){
   $('need-loc').hidden = !state.event.needsLocation;
   $('p-loc').classList.toggle('suggest', !!state.event.needsLocation);
 
-  /* An edit is always one occurrence, so the series controls stay out of it. */
+  /* The repeat controls make a new series; an edit joins one that exists. */
   $('repeat-field').hidden = upd || state.allDay;
   state.repeat = (!upd && src.repeat === 'weekly') ? 'weekly' : 'none';
   $('p-until').value = dateShow(src.repeatUntil || '');
@@ -3106,10 +3112,32 @@ function renderMatch(upd){
   $('c-title').textContent = m.title || '—';
   $('c-when').textContent  = whenText(m) || '—';
   $('c-loc').textContent   = m.location || '—';
-  /* the brief's rule: single instance, never the series */
-  say('p-recurring', m.recurring
-    ? 'זהו אירוע חוזר. העדכון יחול על המופע הזה בלבד — לא על כל הסדרה.'
-    : '', 'note');
+  /* Which of the two it will be is the user's to say, so the note explains
+     the choice and the buttons make it. validate() writes the text, since it
+     depends on fields that are still being edited. */
+  if (!m.recurring) say('p-recurring', '', 'note');
+}
+
+/* Editing one occurrence of a series, or all of them. The wider action is a
+   separate button rather than a checkbox: two buttons cannot be pressed by
+   accident, and the label says which one is about to happen.
+
+   A date change is the one edit that cannot spread. Moving every occurrence to
+   another weekday means rewriting the repeat rule, so the button steps back and
+   the note says why, instead of silently ignoring the new date. */
+function renderSeriesOffer(ready){
+  const m = state.match;
+  const on = state.mode === 'update' && !!m && !!m.recurring && !$('b-create').hidden;
+  $('b-create-series').hidden = !on;
+  if (!on) return;
+
+  const moved = !!dateISO() && !!m.date && dateISO() !== m.date;
+  $('b-create-series').disabled = moved || !ready;
+  say('p-recurring', moved
+    ? 'זהו אירוע חוזר. שינוי התאריך יחול על המופע הזה בלבד — כדי לעדכן את כל ' +
+      'הסדרה, החזירו את התאריך המקורי.'
+    : 'זהו אירוע חוזר. אפשר לעדכן רק את המופע הזה, או את כל הסדרה — כל מופע ' +
+      'נשאר בתאריך שלו.', 'note');
 }
 
 /* ---- "did you mean tomorrow, or next week?" -------------------- */
@@ -3994,10 +4022,16 @@ function validate(){
   $('end-field').classList.toggle('needs', flagEnd);
 
   $('create-label').textContent = createLabel();
+  renderSeriesOffer(filled && series);
 }
 
-async function submit(){
+/**
+ * @param {string=} scope 'series' updates every occurrence; anything else, and
+ *   every event that does not repeat, updates the one occurrence on screen.
+ */
+async function submit(scope){
   const upd = state.mode === 'update' && !!state.match;
+  const wide = scope === 'series' && upd && !!state.match.recurring;
   const weekly = repeatsWeekly();
   const all = state.allDay;
   const ev = {
@@ -4017,20 +4051,39 @@ async function submit(){
   };
   const payload = upd
     ? { secret:state.secret, action:'update', user:state.user,
-        id:state.match.id, scope:'instance', event:ev }
+        id:state.match.id, scope: wide ? 'series' : 'instance', event:ev }
     : { secret:state.secret, action:'create', user:state.user, event:ev };
 
   say('prop-msg', '', 'err');
-  busy('b-create', 'create-spin', 'create-label', true,
-       upd ? 'מעדכן…' : weekly ? 'יוצר סדרה…' : 'יוצר…');
+  /* Whichever button was pressed spins; the other one locks, so the same edit
+     cannot be sent twice at two different widths. */
+  if (wide){
+    busy('b-create-series', 'series-spin', 'series-label', true, 'מעדכן סדרה…');
+    $('b-create').disabled = true;
+  } else {
+    busy('b-create', 'create-spin', 'create-label', true,
+         upd ? 'מעדכן…' : weekly ? 'יוצר סדרה…' : 'יוצר…');
+    $('b-create-series').disabled = true;
+  }
   try {
     const r = await api(payload, T_TEXT);
-    if (!r.ok){ failedWith(r.error, 'prop-msg'); return; }  // proposal stays intact
+    if (!r.ok){
+      /* A phone can be a version ahead of the backend it talks to, and
+         "unsupported scope" explains nothing to the person reading it. */
+      if (wide && /unsupported scope/i.test(r.error || '')){
+        say('prop-msg', 'עדכון כל הסדרה דורש גרסה חדשה יותר של השרת. ' +
+                        'עדכון המופע הזה עובד כרגיל.', 'err');
+        return;
+      }
+      failedWith(r.error, 'prop-msg'); return;              // proposal stays intact
+    }
 
     state.created.push({
       title: ev.title,
       when:  r.when || whenText(ev),
       updated: upd,
+      /* what the backend says it did, not what was asked of it */
+      scope: r.scope === 'series' ? 'series' : '',
       /* an older backend ignores `repeat` and makes one event; reporting a
          series it did not create would be a lie, so this follows the reply */
       count: r.repeat === 'weekly' ? (r.count || 0) : 0
@@ -4044,6 +4097,8 @@ async function submit(){
     say('prop-msg', netMessage(e), 'err');
   } finally {
     busy('b-create', 'create-spin', 'create-label', false, createLabel());
+    busy('b-create-series', 'series-spin', 'series-label', false, 'עדכון כל הסדרה');
+    validate();                     // and the buttons go back to their own rules
   }
 }
 
@@ -4167,7 +4222,8 @@ $('i-text').addEventListener('paste', e => {
   if (img){ e.preventDefault(); attach(img); }
 });
 
-$('b-create').addEventListener('click', submit);
+$('b-create').addEventListener('click', () => submit());
+$('b-create-series').addEventListener('click', () => submit('series'));
 $('b-del').addEventListener('click', () => confirmDelete('instance'));
 $('b-del-series').addEventListener('click', armSeries);
 $('b-del-alts').addEventListener('click', () => {

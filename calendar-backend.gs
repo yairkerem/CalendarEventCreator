@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 46;
+const BACKEND_VERSION = 47;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -1391,10 +1391,10 @@ function weeklyCount(fromIso, untilIso) {
 
 // ---------- step 2b: confirmed edit -> existing calendar event ----------
 /**
- * `scope` is always 'instance'. getEventById returns the single occurrence for
- * a recurring event, so mutating it here never touches the rest of the series
- * — which is the rule the brief sets. Anything other than 'instance' is
- * refused rather than quietly widened.
+ * `scope` is 'instance' or 'series'. getEventById returns the single
+ * occurrence for a recurring event, so the default touches nothing else; a
+ * series edit is asked for explicitly, by a button the app shows only for a
+ * recurring event. Any other scope is refused rather than quietly widened.
  */
 /* The one action with nothing to undo. It never searches: it takes the id of
  * an event the user has already seen on screen and confirmed, so what is
@@ -1423,10 +1423,14 @@ function updateEvent(id, scope, ev, user) {
   if (!id)       return { ok: false, error: 'missing event id' };
   if (!ev.allDay && !hhmm(ev.start)) return { ok: false, error: 'missing start time' };
   if (!ev.allDay && !hhmm(ev.end))   return { ok: false, error: 'missing end time' };
-  if (scope && scope !== 'instance') return { ok: false, error: 'unsupported scope' };
+  if (scope && scope !== 'instance' && scope !== 'series') {
+    return { ok: false, error: 'unsupported scope' };
+  }
 
   const target = calendar().getEventById(id);
   if (!target) return { ok: false, error: 'event not found' };
+
+  if (scope === 'series') return updateSeries(target, ev, user);
 
   target.setTitle(ev.title);
 
@@ -1457,6 +1461,95 @@ function updateEvent(id, scope, ev, user) {
   );
 
   return { ok: true, id: target.getId(), when: when };
+}
+
+/* Every occurrence at once. CalendarApp can retitle, relocate and recolour a
+ * series through the series object, but it cannot say when a series happens:
+ * setRecurrence() wants the rule built again from nothing and there is no
+ * getRecurrence() to read the old one back, so a weekly-on-Tuesday series
+ * would return as whatever this code had guessed. Patching the series' own
+ * first event over the REST API leaves the rule untouched, and every
+ * occurrence nobody has edited by hand follows it.
+ *
+ * The date is left alone on purpose. Moving a series to another weekday means
+ * rewriting its rule, so a date change stays an edit of one occurrence — the
+ * app says so, and withholds this button, before it is asked for.
+ *
+ * @param {CalendarEvent} target the occurrence the user was looking at
+ */
+function updateSeries(target, ev, user) {
+  if (!target.isRecurringEvent()) return { ok: false, error: 'not a recurring event' };
+  const series = target.getEventSeries();
+
+  /* The clock first: it is the only part that can fail, and a series left
+     half-edited is worse than one not edited at all. */
+  if (!ev.allDay) {
+    /* Normalised, not as typed: "4:45" parses fine for CalendarApp but would
+       build an invalid timestamp for the REST API. */
+    const moved = seriesClock(series.getId(), hhmm(ev.start), hhmm(ev.end));
+    if (!moved.ok) return moved;
+  }
+
+  series.setTitle(ev.title);
+
+  const color = colorFor(ev.title);
+  if (color) series.setColor(color);
+
+  series.setLocation(ev.location || '');
+  series.setDescription(
+    [ev.note || '', user ? 'עודכן על ידי: ' + user : ''].filter(String).join('\n')
+  );
+
+  /* What comes back describes the occurrence the user had on screen: the
+     series' other dates did not move, so its own is the honest one to show. */
+  const when = ev.allDay
+    ? whenAllDay(ev.date, allDaySpan(ev).last || ev.date)
+    : whenHe(toDate(ev.date, ev.start), toDate(ev.date, ev.end));
+
+  return { ok: true, id: series.getId(), when: when, scope: 'series' };
+}
+
+/* Moves a whole series to another time of day, keeping the day it falls on.
+ * The advanced Calendar service is not enabled here and turning it on means
+ * editing a manifest that never appears on screen, so this goes straight to
+ * the REST API with the token CalendarApp has already been granted — the same
+ * scope, no extra consent. Only start and end are sent: a PATCH leaves the
+ * recurrence rule, and everything else, as it was.
+ *
+ * @returns {{ok: boolean, moved?: boolean, error?: string}} moved is false for
+ *   an all-day series, which has no clock to move.
+ */
+function seriesClock(seriesId, start, end) {
+  const base = 'https://www.googleapis.com/calendar/v3/calendars/' +
+               encodeURIComponent(calendar().getId()) + '/events/' +
+               encodeURIComponent(String(seriesId).replace(/@.*$/, ''));
+  const auth = { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() };
+
+  const got = UrlFetchApp.fetch(base, { headers: auth, muteHttpExceptions: true });
+  if (got.getResponseCode() !== 200) {
+    return { ok: false, error: 'לא ניתן לקרוא את הסדרה מהיומן (' + got.getResponseCode() + ')' };
+  }
+
+  const master = JSON.parse(got.getContentText());
+  if (!master.start || !master.start.dateTime) return { ok: true, moved: false };
+
+  /* The series' own first day, in its own timezone — the rule hangs off it. */
+  const first = String(master.start.dateTime).slice(0, 10);
+  const last  = end <= start ? plusDays(first, 1) : first;   // crosses midnight
+  const res = UrlFetchApp.fetch(base, {
+    method: 'patch',
+    contentType: 'application/json',
+    headers: auth,
+    payload: JSON.stringify({
+      start: { dateTime: first + 'T' + start + ':00', timeZone: TZ },
+      end:   { dateTime: last  + 'T' + end   + ':00', timeZone: TZ }
+    }),
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() >= 300) {
+    return { ok: false, error: 'עדכון שעת הסדרה נכשל: ' + res.getContentText().slice(0, 200) };
+  }
+  return { ok: true, moved: true };
 }
 
 /** Builds a Date in Israel time — handles winter/summer clock automatically. */

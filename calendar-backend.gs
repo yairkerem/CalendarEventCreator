@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 52;
+const BACKEND_VERSION = 53;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -401,10 +401,13 @@ function CONTENT_RULES() {
     '  אם היא ניחוש סביר — החזר אותה בכל זאת וסמן needsTitle=true.',
     '  המשתמש רואה כל כותרת ומאשר אותה לפני היצירה, ולכן הצעה עדיפה על שאלה.',
     '- הוסף שם של אדם לכותרת רק כשההודעה באמת מציינת אותו.',
+    '  אחרת תאר את האירוע עצמו: "אסיפת הורים", "ארוחה משפחתית", "תור לרופא".',
     '- כשמוזכר בהודעה אחד מבני המשפחה, הכותרת מתחילה בשמו ואחריו " - ":',
     '  "דנה - חוג ריקוד", "איתי - אימון". לא "אימון איתי", לא "אימון של איתי"',
-    '  ולא "אימון - איתי".',
-    '  אחרת תאר את האירוע עצמו: "אסיפת הורים", "ארוחה משפחתית", "תור לרופא".',
+    '  ולא "אימון - איתי". בן המשפחה שהוזכר לא נשמט מהכותרת לעולם.',
+    '- רק שם מרשימת בני המשפחה בא לפני " - ". שם של כל אדם אחר — רופא, מאמן,',
+    '  מארח, חבר — נשאר בתוך הכותרת, בצורה שבה ההודעה אמרה אותו: "איתי תור',
+    '  למשה" = "איתי - תור למשה", ולעולם לא "משה - תור".',
     '- מילים שמתארות את ההודעה ולא את האירוע לא נכנסות לכותרת לעולם:',
     '  לוז, לו"ז, לו״ז, לוח זמנים, סדר יום, מערכת שעות, עדכון, תזכורת, הודעה.',
     '  הן כותרת של ההודעה, לא של מה שקורה ביומן.',
@@ -604,9 +607,18 @@ function parseText(text, file, history) {
              intent: out.intent || 'create' };
   }
 
-  const parsed = (Array.isArray(out.events) ? out.events : [])
-    .filter(function (raw) { return raw && typeof raw === 'object'; })
-    .map(toEvent);
+  /* Everything the user said, answers to questions included: the owner is
+     read from these words, never from a title the model wrote back. */
+  const said = [text].concat((history || [])
+      .filter(function (t) { return t && t.role === 'user'; })
+      .map(function (t) { return typeof t.content === 'string' ? t.content : ''; }))
+    .filter(Boolean).join(' ');
+  const rawEvents = (Array.isArray(out.events) ? out.events : [])
+    .filter(function (raw) { return raw && typeof raw === 'object'; });
+  /* One event, and the message is about it. Several, and a name the message
+     says belongs to one of its lines, not to every event in it. */
+  const who = rawEvents.length === 1 ? { owner: soleOwner(said), said: said } : null;
+  const parsed = rawEvents.map(function (raw) { return toEvent(raw, who); });
 
   /* One unusable event is still worth showing — the form lets the user fill in
      what the message left out. Several, and the undated ones are noise between
@@ -876,7 +888,7 @@ function amendEvent(current, text, history, source) {
              intent: out.intent || 'create' };
   }
 
-  const ev = toEvent(out);
+  const ev = toEvent(out, { owner: soleOwner(text), said: text });
 
   /* A field the model left empty is one it had nothing to say about, not one
      the user asked to clear — clearing is what the field on screen is for. */
@@ -959,43 +971,99 @@ function personTag(title) {
 function personFirst(title) {
   const raw = String(title || '').trim();
   if (!raw || personTag(raw)) return raw;
-  const names = knownPeople();
-  if (!names.length) return raw;
+  const who = soleOwner(raw);
+  if (!who) return raw;
+  const rest = demoteStray(withoutPerson(raw, who), '');
+  return rest ? who + ' - ' + rest : raw;   // a title that was only the name stays
+}
 
-  const words = raw.split(/\s+/);
-  const hits = [];
-  const owners = {};
-  words.forEach(function (word, i) {
-    const w = foldHe(word).replace(/^[-–—(]+|[-–—,.:;)]+$/g, '');
-    names.forEach(function (name) {
-      const n = foldHe(name);
-      /* the name itself, or with a joined particle or two: לדנה, ושל... ולדנה.
-         Only those letters count, so תנועה is never read as נועה. */
-      const joined = n.length >= 3 && w.length > n.length &&
-                     w.slice(-n.length) === n &&
-                     /^[ובלמשה]{1,2}$/.test(w.slice(0, -n.length));
-      if (w === n || joined) {
-        hits.push(i);
-        owners[name] = true;
-      }
-    });
+/* Does this word name this person: the name alone, or with a joined particle
+ * or two — לדנה, ולדנה, שדנה. Only those letters count, so תנועה is never read
+ * as נועה. */
+function namesPerson(word, name) {
+  const w = foldHe(word).replace(/^[-–—("']+|[-–—,.:;)"'!?]+$/g, '');
+  const n = foldHe(name);
+  if (!w || !n) return false;
+  if (w === n) return true;
+  return n.length >= 3 && w.length > n.length && w.slice(-n.length) === n &&
+         /^[ובלמשה]{1,2}$/.test(w.slice(0, -n.length));
+}
+
+/* The one family member a piece of text names, or '' for none — and for two,
+ * since "דנה ואיתי" is a joint event and choosing one of them would be a guess. */
+function soleOwner(text) {
+  const words = String(text || '').split(/\s+/);
+  const owners = knownPeople().filter(function (name) {
+    return words.some(function (w) { return namesPerson(w, name); });
   });
-  const who = Object.keys(owners);
-  if (who.length !== 1) return raw;
+  return owners.length === 1 ? owners[0] : '';
+}
 
+/* The title with this person taken out of it — with a של before the name, and
+ * the dashes and invisible direction marks that leaves behind. */
+function withoutPerson(title, name) {
+  const words = String(title || '').trim().split(/\s+/);
   const drop = {};
-  hits.forEach(function (i) {
+  words.forEach(function (w, i) {
+    if (!namesPerson(w, name)) return;
     drop[i] = true;
     if (i > 0 && foldHe(words[i - 1]) === 'של') drop[i - 1] = true;   // "חוג של דנה"
   });
-  const rest = words.filter(function (w, i) { return !drop[i]; }).join(' ')
-    /* a rewritten title is a new string, and must not carry a dictation's
-       invisible direction marks into the calendar with it */
+  return words.filter(function (w, i) { return !drop[i]; }).join(' ')
     .replace(/[\u200e\u200f\u2066-\u2069\u202a-\u202e]/g, '')
     .replace(/\s+[-–—]\s+[-–—]\s+/g, ' - ')    // a dash left on each side
     .replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')      // or at either end
     .trim();
-  return rest ? who[0] + ' - ' + rest : raw;   // a title that was only the name stays
+}
+
+/* A single word the model promoted into a prefix — "משה - תור" — belongs back
+ * inside the title once the real owner goes in front, in the form the user said
+ * it: "איתי - תור למשה".
+ *
+ * But a word in front of a dash is just as often the activity itself —
+ * "שחייה - מתקדמים" — and moving that one wrecks the title. So it is moved only
+ * on evidence, from the user's own words, that it names a person: joined to ל
+ * ("למשה"), or after אצל / עם / של / אל ("אצל משה"). With no such sign, and
+ * with no words to look at (a photo), the title stays as the model wrote it.
+ */
+function demoteStray(rest, said) {
+  const stray = String(rest || '').match(/^(\S+)\s+[-–—]\s+(.+)$/);
+  if (!stray) return rest;
+  const words = String(said || '').split(/\s+/).map(function (w) {
+    return w.replace(/[\u200e\u200f\u2066-\u2069\u202a-\u202e]/g, '')
+            .replace(/^[("']+|[,.:;)"'!?]+$/g, '');
+  });
+  const name = foldHe(stray[1]);
+  for (let i = 0; i < words.length; i++) {
+    if (!namesPerson(words[i], stray[1])) continue;
+    const w = foldHe(words[i]);
+    const lead = w.slice(0, w.length - name.length);
+    if (/ל/.test(lead) && !/ה/.test(lead)) return stray[2] + ' ' + words[i];
+    const before = i > 0 ? foldHe(words[i - 1]) : '';
+    if (!lead && /^(אצל|עמ|של|אל)$/.test(before)) {
+      return stray[2] + ' ' + words[i - 1] + ' ' + words[i];
+    }
+  }
+  return rest;
+}
+
+/* The owner as the user named them, not as the model's title did. Asked for
+ * "Name - activity", a model will sometimes put the wrong person in front:
+ * "איתי תור למשה" came back as "משה - תור", with the one family member dropped
+ * altogether. The title only knows what the model kept; what the user said
+ * still has the rest. So when those words name exactly one family member, that
+ * is whose event this is —
+ *
+ * - a title already led by a family member is left alone: that was a choice
+ *   about a name the user did say;
+ * - otherwise the owner is lifted out of wherever it sits and put in front,
+ *   and a word the model had promoted goes back inside: "איתי - תור למשה".
+ */
+function ownerFirst(title, owner, said) {
+  const raw = String(title || '').trim();
+  if (!raw || !owner || personTag(raw)) return raw;
+  const rest = demoteStray(withoutPerson(raw, owner), said);
+  return rest ? owner + ' - ' + rest : raw;
 }
 
 /* An edit is not a rename. "החוג של דנה עובר ל-17:00" says the name so the
@@ -1123,7 +1191,11 @@ function questionOptions(raw) {
 }
 
 /** One raw item from the model's `events` array, cleaned into what the app reads. */
-function toEvent(raw) {
+/**
+ * @param {Object=} who  { owner, said } — the family member the user's own words
+ *   named, when there was exactly one and the reply is a single event
+ */
+function toEvent(raw, who) {
   const ev = {
     title:      String(raw.title || '').trim(),
     date:       raw.bareYear ? rollYear(raw.date || '') : (raw.date || ''),
@@ -1149,6 +1221,7 @@ function toEvent(raw) {
     repeatUntil: isDate(raw.repeatUntil) ? raw.repeatUntil : ''
   };
 
+  if (who && who.owner) ev.title = ownerFirst(ev.title, who.owner, who.said);
   ev.title = personFirst(ev.title);
 
   /* A whole week is a day-long event whose ends nobody stated: the message

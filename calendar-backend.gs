@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 51;
+const BACKEND_VERSION = 52;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -401,6 +401,9 @@ function CONTENT_RULES() {
     '  אם היא ניחוש סביר — החזר אותה בכל זאת וסמן needsTitle=true.',
     '  המשתמש רואה כל כותרת ומאשר אותה לפני היצירה, ולכן הצעה עדיפה על שאלה.',
     '- הוסף שם של אדם לכותרת רק כשההודעה באמת מציינת אותו.',
+    '- כשמוזכר בהודעה אחד מבני המשפחה, הכותרת מתחילה בשמו ואחריו " - ":',
+    '  "דנה - חוג ריקוד", "איתי - אימון". לא "אימון איתי", לא "אימון של איתי"',
+    '  ולא "אימון - איתי".',
     '  אחרת תאר את האירוע עצמו: "אסיפת הורים", "ארוחה משפחתית", "תור לרופא".',
     '- מילים שמתארות את ההודעה ולא את האירוע לא נכנסות לכותרת לעולם:',
     '  לוז, לו"ז, לו״ז, לוח זמנים, סדר יום, מערכת שעות, עדכון, תזכורת, הודעה.',
@@ -943,6 +946,58 @@ function personTag(title) {
   return '';
 }
 
+/* The house form for a title that belongs to someone: "דנה - חוג ריקוד". The
+ * name buttons write it, the colour rule reads it, and it is what a person
+ * scanning the week reads first — yet a model asked for a title writes "חוג
+ * ריקוד של דנה", "אימון איתי" or "מפגש - נועה" just as readily. So a title that
+ * names exactly one known person, anywhere in it, gets that name in front.
+ *
+ * A title naming two people is left as it is: "דנה ואיתי - בריכה" is a joint
+ * event, and putting one of them first would be a guess.
+ * @returns {string} the title with its owner in front, or unchanged
+ */
+function personFirst(title) {
+  const raw = String(title || '').trim();
+  if (!raw || personTag(raw)) return raw;
+  const names = knownPeople();
+  if (!names.length) return raw;
+
+  const words = raw.split(/\s+/);
+  const hits = [];
+  const owners = {};
+  words.forEach(function (word, i) {
+    const w = foldHe(word).replace(/^[-–—(]+|[-–—,.:;)]+$/g, '');
+    names.forEach(function (name) {
+      const n = foldHe(name);
+      /* the name itself, or with a joined particle or two: לדנה, ושל... ולדנה.
+         Only those letters count, so תנועה is never read as נועה. */
+      const joined = n.length >= 3 && w.length > n.length &&
+                     w.slice(-n.length) === n &&
+                     /^[ובלמשה]{1,2}$/.test(w.slice(0, -n.length));
+      if (w === n || joined) {
+        hits.push(i);
+        owners[name] = true;
+      }
+    });
+  });
+  const who = Object.keys(owners);
+  if (who.length !== 1) return raw;
+
+  const drop = {};
+  hits.forEach(function (i) {
+    drop[i] = true;
+    if (i > 0 && foldHe(words[i - 1]) === 'של') drop[i - 1] = true;   // "חוג של דנה"
+  });
+  const rest = words.filter(function (w, i) { return !drop[i]; }).join(' ')
+    /* a rewritten title is a new string, and must not carry a dictation's
+       invisible direction marks into the calendar with it */
+    .replace(/[\u200e\u200f\u2066-\u2069\u202a-\u202e]/g, '')
+    .replace(/\s+[-–—]\s+[-–—]\s+/g, ' - ')    // a dash left on each side
+    .replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')      // or at either end
+    .trim();
+  return rest ? who[0] + ' - ' + rest : raw;   // a title that was only the name stays
+}
+
 /* An edit is not a rename. "החוג של דנה עובר ל-17:00" says the name so the
  * event can be found, and a model asked for a title will duly answer "חוג" —
  * which then lands on top of "דנה - חוג ריקוד" in the calendar, taking both the
@@ -956,24 +1011,34 @@ function personTag(title) {
  * A real rename still goes through, and only gets back the prefix it forgot: a
  * new name that already names somebody is left exactly as it came, since moving
  * an event from one child to another is a rename like any other.
+ *
+ * One name does change: when the message says whose the event is and the
+ * calendar never did, the owner goes in front of the calendar's own words —
+ * "המפגש אצל הסבא הוא של נועה" turns "מפגש אצל הסבא" into "נועה - מפגש אצל
+ * הסבא", which also gives it her colour. The words themselves are untouched.
  */
 function keepFoundName(ev) {
   const have = String((ev.match && ev.match.title) || '');
   const want = String(ev.title || '');
   if (!have || !want) return;
 
+  /* The calendar's name read in the house form, so an event saved before it —
+     "מפגש - נועה" — is known to be hers. */
+  const own = personFirst(have);
+  const tagHave = personTag(own);
+  const tagWant = personTag(want);
+
   /* Whose event it is counts as a name: "החוג של דנה עובר לאיתי" keeps every
      other word, and is still a rename. */
-  const tagHave = personTag(have);
-  const tagWant = personTag(want);
-  if (tagWant && tagWant !== tagHave) return;
+  if (tagWant && tagHave && tagWant !== tagHave) return;
 
   const bare = function (t) { return t.slice(personTag(t).length).trim(); };
-  const found = bare(have);
-  const asked = bare(want);
 
-  if (titleMatches(found, foldHe(asked))) {
-    ev.title = '';
+  if (titleMatches(bare(own), foldHe(bare(want)))) {
+    /* Only said again. The calendar's name stands exactly as it is — unless the
+       message named its owner, in which case it comes back in the house form. */
+    const keep = !tagWant ? have : tagHave ? own : tagWant + own;
+    ev.title = keep === have ? '' : keep;
     ev.needsTitle = false;
     return;
   }
@@ -1083,6 +1148,8 @@ function toEvent(raw) {
        just as confirmed as a good one. */
     repeatUntil: isDate(raw.repeatUntil) ? raw.repeatUntil : ''
   };
+
+  ev.title = personFirst(ev.title);
 
   /* A whole week is a day-long event whose ends nobody stated: the message
      names one day in it, and both ends follow from that. */

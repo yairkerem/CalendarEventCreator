@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 53;
+const BACKEND_VERSION = 54;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -367,21 +367,23 @@ function nextEachDay(todayIso, todayDow) {
   return '- המופע הקרוב הבא של כל יום (אף פעם לא היום עצמו): ' + days.join(', ') + '.';
 }
 
-/* Also shared between `parse` and `amend`. A bare hour is read literally and
- * never nudged into the afternoon: "3" is 03:00, not 15:00. The guess would be
- * right most of the time and silently wrong the rest, and a wrong hour looks
- * exactly as confident as a right one. Predictable beats clever here — anyone
- * who means the afternoon can say so, or fix it on the confirm screen. */
+/* Also shared between `parse` and `amend`. A bare 1 to 7 is read as the
+ * afternoon: in this family's messages "ב-5" is five in the afternoon, and
+ * almost nothing starts at five in the morning. This reverses the earlier rule,
+ * which read such an hour literally; reading it literally was predictable and
+ * wrong nearly every time, and the confirm screen shows the hour either way.
+ * 8 to 12 are still read as said, and any stated part of the day wins. */
 function TIME_RULES() {
   return [
     'כללי שעה:',
     '- כל השעות בפורמט HH:mm בשעון 24.',
-    '- שעה שנאמרה בלי ציון חלק היום נקראת בדיוק כפי שנכתבה, בלי להזיז אותה:',
-    '  "ב-3" = 03:00, "בשעה 8" = 08:00, "ב-4:30" = 04:30.',
-    '- אל תניח אחר צהריים או ערב רק מפני שזה נראה סביר יותר לאירוע כזה.',
-    '  זה נכון גם לאימונים, חוגים ומשחקים שבדרך כלל מתקיימים אחר הצהריים.',
-    '- רק ציון מפורש מזיז את השעה: "בערב", "אחה"צ", "אחר הצהריים", "בלילה",',
-    '  "בבוקר", PM/AM. "8 בערב" = 20:00, "3 אחה"צ" = 15:00, "8 בבוקר" = 08:00.',
+    '- שעה 1 עד 7 שנאמרה בלי ציון חלק היום היא אחר הצהריים או ערב:',
+    '  "ב-3" = 15:00, "ב-5" = 17:00, "ב-4:30" = 16:30. כך נאמרות השעות האלה',
+    '  בהודעות במשפחה, וכמעט אף אירוע אינו מתחיל בשעות האלה בבוקר.',
+    '- שעה 8 עד 12 בלי ציון נקראת כפי שנאמרה: "בשעה 8" = 08:00, "ב-12" = 12:00.',
+    '- ציון מפורש גובר תמיד, לשני הכיוונים: "בערב", "אחה"צ", "אחר הצהריים",',
+    '  "בלילה", "בבוקר", "לפנות בוקר", PM/AM. "5 בבוקר" = 05:00, "8 בערב" = 20:00,',
+    '  "3 אחה"צ" = 15:00, "7 בבוקר" = 07:00.',
     '- שעה שנכתבה כבר בשעון 24 ("15:00", "16:30") נשארת כפי שהיא.',
     '- טווח ("16:30 - 18:00") הוא שעת התחלה ושעת סיום של אותו אירוע.',
     '- בטווח, ציון חלק היום שנאמר בצד אחד חל גם על הצד השני:',
@@ -617,7 +619,7 @@ function parseText(text, file, history) {
     .filter(function (raw) { return raw && typeof raw === 'object'; });
   /* One event, and the message is about it. Several, and a name the message
      says belongs to one of its lines, not to every event in it. */
-  const who = rawEvents.length === 1 ? { owner: soleOwner(said), said: said } : null;
+  const who = { said: said, owner: rawEvents.length === 1 ? soleOwner(said) : '' };
   const parsed = rawEvents.map(function (raw) { return toEvent(raw, who); });
 
   /* One unusable event is still worth showing — the form lets the user fill in
@@ -1221,6 +1223,7 @@ function toEvent(raw, who) {
     repeatUntil: isDate(raw.repeatUntil) ? raw.repeatUntil : ''
   };
 
+  if (who && who.said) afternoonHours(ev, who.said);
   if (who && who.owner) ev.title = ownerFirst(ev.title, who.owner, who.said);
   ev.title = personFirst(ev.title);
 
@@ -1799,6 +1802,41 @@ function seriesClock(seriesId, start, end) {
     return { ok: false, error: 'עדכון שעת הסדרה נכשל: ' + res.getContentText().slice(0, 200) };
   }
   return { ok: true, moved: true };
+}
+
+/* The clock a family message keeps: "ב-5" is five in the afternoon. Hours 1 to 7
+ * are the ones nobody means literally — practice, clubs, visits and meals all
+ * fall after noon — while 8 to 12 are read as they were said, so "בשעה 8" stays
+ * the morning.
+ *
+ * Anything in the message that states a part of the day stops this for every
+ * event in it, in either direction: a person who wrote "בבוקר", "לפנות בוקר" or
+ * AM anywhere said what they meant, and so did one who wrote a leading-zero
+ * "05:00". Without such a word — and a photo carries none — the model's own
+ * reading stands, since there is nothing here to check it against.
+ *
+ * @param {string} said  the user's own words, never the model's reply
+ */
+function afternoonHours(ev, said) {
+  if (ev.allDay || !ev.start) return;
+  const words = foldHe(said);
+  if (!words) return;
+  if (/בבוקר|לפנות בוקר|השכמ|בהשכמה/.test(words)) return;
+  if (/\bam\b|a\.m\./i.test(words)) return;
+  if (/0[1-7]:[0-5][0-9]/.test(words)) return;      // "05:00" was said in full
+
+  const hour = function (t) { return Number(String(t).slice(0, 2)); };
+  const bump = function (t) { return ('0' + (hour(t) + 12)).slice(-2) + String(t).slice(2); };
+
+  if (hour(ev.start) < 1 || hour(ev.start) > 7) return;
+  const was = ev.start;
+  ev.start = bump(ev.start);
+  if (!ev.end) return;
+
+  /* The end follows the start it belongs to: "5 עד 8" is 17:00 to 20:00, not an
+     event that runs to the following morning. */
+  if (hour(ev.end) >= 1 && hour(ev.end) <= 7) ev.end = bump(ev.end);
+  else if (ev.end < ev.start && hour(ev.end) <= 11 && ev.end > was) ev.end = bump(ev.end);
 }
 
 /** Builds a Date in Israel time — handles winter/summer clock automatically. */

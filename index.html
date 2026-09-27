@@ -580,13 +580,6 @@ button{font:inherit;cursor:pointer}
     <div class="attach" id="voice-get" hidden>
       <button type="button" id="b-voice-install" class="chip">הורדת עברית לעיבוד במכשיר</button>
     </div>
-    <!-- records exactly what the speech engine sends and how an existing
-         event was matched, so a fault can be read rather than guessed at -->
-    <div class="attach" id="voice-diag-row">
-      <button type="button" id="b-voice-diag" class="chip">אבחון: כבוי</button>
-      <button type="button" id="b-voice-copy" class="chip" hidden>העתקת היומן</button>
-    </div>
-    <pre id="voice-log" class="difflog" hidden></pre>
   </div>
 
   <div id="setup-msg" class="msg" hidden></div>
@@ -597,6 +590,19 @@ button{font:inherit;cursor:pointer}
       <span id="connect-label">התחברות ובדיקה</span>
     </button>
     <button id="b-setup-back" class="btn secondary" hidden>חזרה</button>
+  </div>
+
+  <!-- Last of all, below the buttons: the switch records exactly what the
+       speech engine sends and how an existing event was matched, so a fault can
+       be read rather than guessed at. It is a tool for a bad day, not part of
+       setting the app up, and its log can run long — which is why it sits at
+       the foot of the screen and nothing is placed after it. -->
+  <div class="field" id="diag-field" style="margin-top:22px">
+    <div class="attach" id="voice-diag-row" style="margin-top:0">
+      <button type="button" id="b-voice-diag" class="chip">אבחון: כבוי</button>
+      <button type="button" id="b-voice-copy" class="chip" hidden>העתקת היומן</button>
+    </div>
+    <pre id="voice-log" class="difflog" hidden></pre>
   </div>
 </section>
 
@@ -943,7 +949,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 77;
+const APP_VERSION = 78;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';

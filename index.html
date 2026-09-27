@@ -943,7 +943,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 75;
+const APP_VERSION = 76;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -1036,6 +1036,7 @@ const state = {
   overflow:'',     // '' | 'cap' | 'cut' — why the queue is shorter than that
   created:[],      // {title, when} for each one that actually reached the calendar
   repeat:'none',   // 'none' | 'weekly' — what the chips on screen currently say
+  endTouched:false,// the end time on screen was typed by hand, so leave it alone
   allDay:false,    // a day-long event: no clock, and possibly several days
   amendLog:[],     // [{role,content}] of the corrections typed for THIS event
   amended:[],      // fields the last correction moved, so the badges can say so
@@ -2396,6 +2397,20 @@ function stampDate(){
 /* ---- 24h time fields ------------------------------------------ */
 function validTime(v){ return /^([01]\d|2[0-3]):[0-5]\d$/.test(v || ''); }
 
+function minutesOf(t){ return Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)); }
+
+function clockOf(mins){
+  const m = ((mins % 1440) + 1440) % 1440;             // wraps past midnight
+  return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2);
+}
+
+/* How long an event runs, from two times on the same clock. An end before its
+   start is the small hours of the next morning, not a negative length. */
+function lengthOf(start, end){
+  const mins = minutesOf(end) - minutesOf(start);
+  return mins > 0 ? mins : mins + 1440;
+}
+
 /* A leading 3–9 can only be a one-digit hour (9:30), while 0–2 might still be
    heading for two (16:30). That one rule decides where the colon goes, both
    while typing and when completing the shorthand on blur. */
@@ -2524,6 +2539,7 @@ function loadItem(){
 
   const amb = state.event.ambiguousDay;
   state.ambiguous = (amb && amb.tomorrow && amb.nextWeek) ? amb : null;
+  state.endTouched = false;        // a fresh event, whose end nobody has set
 
   say('p-note', screenNote(state.event), 'note');
   say('prop-msg', '', 'err');
@@ -2963,6 +2979,16 @@ function mergeOnto(match, parsed){
        rather than being overwritten by something unusable. */
     if ((f === 'start' || f === 'end') && v && !validTime(v)) v = '';
     out[f] = (v === null || v === undefined || v === '') ? (match[f] || '') : v;
+  }
+
+  /* "האימון עבר לחמש" says when it starts, not how long it is. Taking the
+     calendar's own end as well would quietly shorten the event by exactly as
+     much as it moved, so the end travels with the start and the length the
+     calendar already holds is kept. A message that states an end of its own
+     has said what it wants, and this leaves it alone. */
+  const moved = validTime(out.start) && validTime(match.start) && out.start !== match.start;
+  if (moved && !validTime(parsed.end) && validTime(match.end) && !out.allDay){
+    out.end = clockOf(minutesOf(out.start) + lengthOf(match.start, match.end));
   }
   return out;
 }
@@ -4042,6 +4068,17 @@ function screenNote(ev){
   return String(ev.notice || ev.note || '').trim();
 }
 
+/* Editing the start on screen does the same as a message that moves it: the end
+   follows, so the event keeps its length. An end the user typed themselves is
+   theirs — from then on nothing moves it, for this event. */
+function keepLength(before, after){
+  if (state.allDay || state.endTouched) return;
+  if (!validTime(before) || !validTime(after) || before === after) return;
+  const end = $('p-end').value;
+  if (!validTime(end)) return;
+  $('p-end').value = clockOf(minutesOf(after) + lengthOf(before, end));
+}
+
 /* Show which fields this edit actually changes on the existing event. */
 /* The "שונה" badge answers "what moved": against the calendar event being
    edited in update mode, and against what the last correction changed
@@ -4348,6 +4385,7 @@ $('b-tocreate').addEventListener('click', () => {
 for (const id of ['p-title','p-date','p-start','p-end','p-loc']){
   $(id).addEventListener('input', () => {
     if (id === 'p-date'){ dateInput($(id)); stampDate(); stampUntil(); loadDaySoon(); }
+    if (id === 'p-end') state.endTouched = true;    // typed here: it is theirs now
     if (id === 'p-start' || id === 'p-end'){ timeInput($(id)); renderDay(); }
     if (id === 'p-title') renderPeople();   // typing a name lights its chip
     markChanges();
@@ -4362,7 +4400,15 @@ for (const id of ['p-start','p-end']){
 for (const id of ['p-start','p-end','p-date']){
   $(id).addEventListener('blur', () => {
     if (id === 'p-date'){ dateBlur($(id)); stampUntil(); loadDay(false); }
-    else { timeRestore($(id)); timeBlur($(id)); renderDay(); }
+    else {
+      /* read before timeRestore clears it: this is the time the field held
+         when it was tapped, which is what the length is measured from */
+      const before = id === 'p-start' ? $(id).dataset.prev : '';
+      timeRestore($(id));
+      timeBlur($(id));
+      if (id === 'p-start') keepLength(before, $(id).value);
+      renderDay();
+    }
     markChanges();
     validate();
   });

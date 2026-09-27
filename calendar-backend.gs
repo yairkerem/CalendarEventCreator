@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 54;
+const BACKEND_VERSION = 55;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -944,20 +944,46 @@ function knownPeople() {
   return list;
 }
 
-/* The "דנה - " that says whose event it is: the app's name buttons write it and
- * the colour rule reads it, which is why losing it costs more than a few
- * characters of title.
- * @returns {string} the prefix with its separator, spelled as configured, or ''
+/* The app writes "דנה - חוג", but an event typed by hand in Google Calendar
+ * comes as "דנה-חוג" or "דנה- חוג" just as often, and a phone keyboard may give
+ * an en dash. It is the same event and the same owner either way, so the
+ * separator is read loosely wherever a name is looked for — which is what
+ * recolorExisting needs to reach those events at all.
+ * @returns {number} how many characters of `title` the name and its separator
+ *   take up, or 0 when the title does not begin with this name
+ */
+function leadLength(title, name) {
+  const raw = String(title || '');
+  const n = String(name || '');
+  if (!n || raw.length <= n.length) return 0;
+  const head = raw.slice(0, n.length);
+  if (head !== n && foldHe(head) !== foldHe(n)) return 0;
+  const sep = raw.slice(n.length).match(/^[ \u00a0]*[-–—][ \u00a0]*/);
+  return sep ? n.length + sep[0].length : 0;
+}
+
+/* Whose event it is, by the same loose reading, said back in the house form.
+ * The canonical spelling is what comes back — two titles written differently
+ * are the same owner, and callers compare these to each other.
+ * @returns {string} "דנה - ", or ''
  */
 function personTag(title) {
-  const raw = String(title || '');
-  const folded = foldHe(raw);
   const names = knownPeople();
   for (const name of names) {
-    if (raw.indexOf(name + ' - ') === 0 ||
-        folded.indexOf(foldHe(name) + ' - ') === 0) return name + ' - ';
+    if (leadLength(title, name)) return name + ' - ';
   }
   return '';
+}
+
+/** The title without its owner, whichever way that owner was written. */
+function withoutTag(title) {
+  const raw = String(title || '');
+  const names = knownPeople();
+  for (const name of names) {
+    const lead = leadLength(raw, name);
+    if (lead) return raw.slice(lead).trim();
+  }
+  return raw.trim();
 }
 
 /* The house form for a title that belongs to someone: "דנה - חוג ריקוד". The
@@ -1102,7 +1128,7 @@ function keepFoundName(ev) {
      other word, and is still a rename. */
   if (tagWant && tagHave && tagWant !== tagHave) return;
 
-  const bare = function (t) { return t.slice(personTag(t).length).trim(); };
+  const bare = function (t) { return withoutTag(t); };
 
   if (titleMatches(bare(own), foldHe(bare(want)))) {
     /* Only said again. The calendar's name stands exactly as it is — unless the
@@ -1464,17 +1490,21 @@ function findCandidates(find, ev) {
  */
 function colorFor(title) {
   const t = String(title || '');
-  const named = function (name) {
-    return t.indexOf(name + ' - ') === 0 ||
-           t.length > name.length + 3 && t.slice(-(name.length + 3)) === ' - ' + name;
+  /* the other way round — "חוג - דנה" — which is how the model used to write it
+     and how an event may still sit in the calendar */
+  const trailing = function (name) {
+    if (t.length <= name.length) return false;
+    const end = t.slice(-name.length);
+    if (end !== name && foldHe(end) !== foldHe(name)) return false;
+    return /[-–—][ \u00a0]*$/.test(t.slice(0, t.length - name.length));
   };
 
   const colors = personColor();
   for (const name in colors) {
-    if (t.indexOf(name + ' - ') === 0) return CalendarApp.EventColor[colors[name]] || null;
+    if (leadLength(t, name)) return CalendarApp.EventColor[colors[name]] || null;
   }
   for (const name in colors) {
-    if (named(name)) return CalendarApp.EventColor[colors[name]] || null;
+    if (trailing(name)) return CalendarApp.EventColor[colors[name]] || null;
   }
   return null;
 }

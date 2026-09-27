@@ -943,7 +943,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 76;
+const APP_VERSION = 77;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -3740,14 +3740,30 @@ function loadDaySoon(){
    so choosing one is really just editing the title prefix. */
 const SEP = ' - ';
 
-function personOf(title){
-  for (const p of state.people) if (title.startsWith(p + SEP)) return p;
+/* The chips write "[שם] - ", but an event typed by hand in the calendar may say
+   "דנה-חוג" or "דנה- חוג", and it is the same person's event. Read loosely here
+   too, or the chip stays dark on an event that plainly names someone — and
+   worse, adding a name would put a second prefix in front of the first. */
+const PERSON_SEP = /^[ \u00a0]*[-–—][ \u00a0]*/;
+
+function personLead(title){
+  const t = String(title || '');
+  for (const p of state.people){
+    if (t.slice(0, p.length) !== p) continue;
+    const sep = PERSON_SEP.exec(t.slice(p.length));
+    if (sep) return { name: p, take: p.length + sep[0].length };
+  }
   return null;
 }
 
+function personOf(title){
+  const lead = personLead(title);
+  return lead ? lead.name : null;
+}
+
 function stripPerson(title){
-  const p = personOf(title);
-  return p ? title.slice(p.length + SEP.length) : title;
+  const lead = personLead(title);
+  return lead ? String(title).slice(lead.take) : title;
 }
 
 function withPerson(title, name){

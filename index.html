@@ -949,7 +949,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 78;
+const APP_VERSION = 79;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -1434,6 +1434,32 @@ function extendsText(longer, shorter){
   return shorter === '' || longer === shorter || longer.indexOf(shorter + ' ') === 0;
 }
 
+/* Is `said` the same sentence as `heard`, written again with one word put
+   differently? Both open with the same words, and where they first differ the
+   two words are versions of each other — "7" rewritten as "7:00", "אימון" as
+   "אימונים" — rather than two different things said. That is what separates a
+   revision from a second segment: "אימון של דנה" and "אימון של איתי" also open
+   alike, but דנה is not איתי half-written. */
+function saysAgain(heard, said){
+  const x = String(heard || '').split(/\s+/).filter(Boolean);
+  const y = String(said  || '').split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < x.length && i < y.length && x[i] === y[i]) i++;
+  if (!i || i >= x.length || i >= y.length) return false;   // nothing shared, or one simply ends
+  /* A Hebrew word changes its last letter when it stops being last — אימון
+     becomes אימונים — so the ending is folded before asking whether one word
+     is the other, half-written. */
+  const a = openEnded(x[i]), b = openEnded(y[i]);
+  return a !== b && (a.indexOf(b) === 0 || b.indexOf(a) === 0);
+}
+
+const HE_FINALS = { 'ך':'כ', 'ם':'מ', 'ן':'נ', 'ף':'פ', 'ץ':'צ' };
+
+/** A word with its final letters written as they are in the middle of a word. */
+function openEnded(word){
+  return String(word || '').replace(/[ךםןףץ]/g, c => HE_FINALS[c]);
+}
+
 /**
  * Fold one transcript into what has been heard so far.
  *
@@ -1443,10 +1469,25 @@ function extendsText(longer, shorter){
  * carries an earlier one further replaces it; a shorter version of what is
  * already held is stale and dropped; only something genuinely new is appended,
  * which is what an engine that sends real segments does instead.
+ *
+ * It also *revises*, and that is not a continuation in either direction: a
+ * sentence held as "…בבריכה הערב 7 עד" came back as "…בבריכה הערב 7:00 עד",
+ * differing in the middle, and was appended — after which every later version
+ * was appended to the pair, and one sentence became four.
+ *
+ * A version is taken as the same sentence said better when the word where the
+ * two first differ is a rewrite of the same word — "7" as "7:00" — and then the
+ * fuller one replaces what is held. Two that merely begin alike — "אימון של
+ * דנה" and "אימון של איתי" — differ at a word that is nobody's rewrite, and are
+ * still two things said.
  */
 function foldSpoken(heard, said){
   if (extendsText(said, heard)) return said;    // the same sentence, further on
   if (extendsText(heard, said)) return heard;   // an older, shorter version
+
+  if (saysAgain(heard, said)){
+    return said.length >= heard.length ? said : heard;   // the same, said better
+  }
   return joinSpoken(heard, said);               // a new segment
 }
 

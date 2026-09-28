@@ -113,7 +113,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 55;
+const BACKEND_VERSION = 56;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -429,6 +429,9 @@ function CONTENT_RULES() {
       '  זה חשוב במיוחד בתמונה: שם מקום מצולם חוזר עם אותיות מוחלפות,',
       '  ואין לתקן אותו לפי הצורה שנראתה אלא לפי הרשימה.',
       '  כשהמקום אינו אחד מהם — החזר אותו כפי שנאמר, בלי לכפות עליו שם מהרשימה.',
+      '- שם מקום יכול להתחיל באות ב׳ או ל׳ שהיא חלק מהשם עצמו, למשל "בלפור".',
+      '  אל תוריד אותה ואל תקרא אותה כמילת יחס: המיקום הוא "בלפור", לא "לפור",',
+      '  גם כשנאמר "האימון בבלפור" או "נפגשים בבלפור".',
       '  אותו כלל חל על שם המקום בתוך הכותרת.'
     ] : []),
     '- כשהמיקום נקרא מתמונה ואינו אחד המקומות המוכרים — סמן needsLocation=true.',
@@ -1249,6 +1252,7 @@ function toEvent(raw, who) {
     repeatUntil: isDate(raw.repeatUntil) ? raw.repeatUntil : ''
   };
 
+  ev.location = snapVenue(ev.location);
   if (who && who.said) afternoonHours(ev, who.said);
   if (who && who.owner) ev.title = ownerFirst(ev.title, who.owner, who.said);
   ev.title = personFirst(ev.title);
@@ -1832,6 +1836,36 @@ function seriesClock(seriesId, start, end) {
     return { ok: false, error: 'עדכון שעת הסדרה נכשל: ' + res.getContentText().slice(0, 200) };
   }
   return { ok: true, moved: true };
+}
+
+/* A venue whose own name opens with ב or ל — "בלפור" — loses that letter when
+ * the model reads it as the word "at": "האימון בבלפור" comes back with the
+ * place named "לפור". The configured list settles it, since a name that is one
+ * letter short of a known venue, or one letter long, is that venue.
+ *
+ * Only the letters that are also words are allowed to differ, so this can never
+ * turn one venue into another — and a place that is not on the list at all is
+ * returned exactly as it was said.
+ */
+function snapVenue(where) {
+  const raw = String(where || '').trim();
+  const list = venues();
+  if (!raw || !list.length) return raw;
+
+  const want = foldHe(raw).toLowerCase();
+  const particle = /^[בהלמשוכ]{1,2}$/;
+  for (const v of list) {
+    if (foldHe(v).toLowerCase() === want) return v;          // already the name
+  }
+  for (const v of list) {
+    const name = foldHe(v).toLowerCase();
+    /* the name with its opening letter eaten, or with one stuck on the front */
+    if (name.length > want.length && name.slice(name.length - want.length) === want &&
+        particle.test(name.slice(0, name.length - want.length))) return v;
+    if (want.length > name.length && want.slice(want.length - name.length) === name &&
+        particle.test(want.slice(0, want.length - name.length))) return v;
+  }
+  return raw;
 }
 
 /* The clock a family message keeps: "ב-5" is five in the afternoon. Hours 1 to 7

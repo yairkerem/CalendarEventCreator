@@ -26,7 +26,7 @@ const HE_DAYS = ['יום ראשון','יום שני','יום שלישי','יום
  * all of them — which is what lets it sit in a public repository without ever
  * holding anyone's children's names.
  *
- * Set these in Project Settings > Script Properties. All four are optional:
+ * Set these in Project Settings > Script Properties. All five are optional:
  * without them the app still reads messages and writes events, it just loses
  * the hints that make it good at one particular family's shorthand.
  * testSetup() reports what is missing, and SETUP.md walks through it.
@@ -34,6 +34,7 @@ const HE_DAYS = ['יום ראשון','יום שני','יום שלישי','יום
  *   PEOPLE        ["דנה","איתי","נועה"]
  *   PERSON_COLOR  {"דנה":"YELLOW","איתי":"PALE_RED"}
  *   VENUES        ["מגרש הדשא","אולם הספורט"]
+ *   WHOLE_NAMES   ["בלפור"] — names whose first letter is part of the name
  *   TEMPLATES     free text; {VENUES} is replaced by the list above
  */
 function cfgJson(name, fallback) {
@@ -71,6 +72,14 @@ function personColor() { return cfgJson('PERSON_COLOR', {}); }
  * nothing to check them against — so the model is given the real list and told
  * to land on it rather than transcribe what the pixels seemed to say. */
 function venues() { return cfgJson('VENUES', []); }
+
+/* Names that open with a letter which is also a word — בלפור, לביא — so the
+ * letter is not read as "at" or "to" and written away: "אימון בבלפור" came back
+ * naming the place "לפור". Deliberately separate from VENUES, because such a
+ * name is not always a place: the same word can be a coach, and then it belongs
+ * in the title rather than the location. This list only protects the spelling;
+ * where the name goes is still read from the message. */
+function wholeNames() { return cfgJson('WHOLE_NAMES', []); }
 
 /** Title patterns for the events this family actually has. {VENUES} is
  *  replaced by the venue list, so the two stay in step. */
@@ -113,7 +122,7 @@ function doPost(e) {
 
 /* Bump on every deploy. `ping` reports it, so the app can prove which build is
  * actually live instead of guessing from behaviour. */
-const BACKEND_VERSION = 56;
+const BACKEND_VERSION = 57;
 
 /* A term's timetable is a long list, so the ceiling is high. It is still a
  * ceiling: past this the message is more likely to have been misread than to
@@ -420,6 +429,14 @@ function CONTENT_RULES() {
        about — "the known venues are ." is worse than saying nothing. */
     ...(people().length
         ? ['- בני המשפחה, כשהם מוזכרים: ' + people().join(', ')] : []),
+    ...(wholeNames().length ? [
+      '- השמות האלה נכתבים במלואם, והאות הראשונה היא חלק מהשם: ' +
+        wholeNames().join(', ') + '.',
+      '  אל תוריד את האות הראשונה ואל תקרא אותה כמילת יחס.',
+      '  שם כזה יכול להיות מקום ויכול להיות אדם — מאמן, מורה, רופא — ולכן שים',
+      '  אותו במקום שבו ההודעה שמה אותו: בכותרת כשמדובר באדם, ב-location',
+      '  כשמדובר במקום. אל תכריח אותו לאחד מהם.'
+    ] : []),
     ...(templates()
         ? ['- תבניות שמות מקובלות, כשהן מתאימות:' + templates()] : []),
     ...(venues().length ? [
@@ -430,8 +447,7 @@ function CONTENT_RULES() {
       '  ואין לתקן אותו לפי הצורה שנראתה אלא לפי הרשימה.',
       '  כשהמקום אינו אחד מהם — החזר אותו כפי שנאמר, בלי לכפות עליו שם מהרשימה.',
       '- שם מקום יכול להתחיל באות ב׳ או ל׳ שהיא חלק מהשם עצמו, למשל "בלפור".',
-      '  אל תוריד אותה ואל תקרא אותה כמילת יחס: המיקום הוא "בלפור", לא "לפור",',
-      '  גם כשנאמר "האימון בבלפור" או "נפגשים בבלפור".',
+      '  אל תוריד אותה ואל תקרא אותה כמילת יחס: המיקום הוא "בלפור", לא "לפור".',
       '  אותו כלל חל על שם המקום בתוך הכותרת.'
     ] : []),
     '- כשהמיקום נקרא מתמונה ואינו אחד המקומות המוכרים — סמן needsLocation=true.',
@@ -1252,7 +1268,8 @@ function toEvent(raw, who) {
     repeatUntil: isDate(raw.repeatUntil) ? raw.repeatUntil : ''
   };
 
-  ev.location = snapVenue(ev.location);
+  ev.title    = keepWhole(ev.title);
+  ev.location = snapVenue(keepWhole(ev.location));
   if (who && who.said) afternoonHours(ev, who.said);
   if (who && who.owner) ev.title = ownerFirst(ev.title, who.owner, who.said);
   ev.title = personFirst(ev.title);
@@ -1838,6 +1855,55 @@ function seriesClock(seriesId, start, end) {
   return { ok: true, moved: true };
 }
 
+/* The same name written back whole, wherever it sits in a line. The model drops
+ * the opening letter when it reads it as a word — "בלפור" becomes "לפור" — and
+ * that happens in a title as readily as in a location, since such a name can be
+ * a coach as easily as a place.
+ *
+ * A word is only restored when it is exactly a configured name minus that one
+ * letter, so nothing else in the line can be touched. Venues count as names
+ * here too: a venue in a title has the same letter to lose.
+ */
+function keepWhole(text) {
+  const raw = String(text || '');
+  const names = wholeNames().concat(venues());
+  if (!raw.trim() || !names.length) return raw;
+
+  const bare = function (w) {
+    return w.replace(/^[("'\[]+/, '').replace(/[,.:;!?)"'\]]+$/, '');
+  };
+  const lead = function (w) { return (w.match(/^[("'\[]+/) || [''])[0]; };
+  const tail = function (w) { return (w.match(/[,.:;!?)"'\]]+$/) || [''])[0]; };
+
+  const words = raw.trim().split(/\s+/);
+  let changed = false;
+
+  for (const name of names) {
+    const full = foldHe(name).toLowerCase();
+    if (full.length < 2 || !/^[בהלמשוכ]$/.test(full.charAt(0))) continue;
+    /* the name as the model left it: its own first letter taken for a word.
+       Matched across as many words as the name has, so a two-word place is
+       found as a phrase and not one half of it. */
+    const want = full.slice(1).trim().split(/\s+/).filter(Boolean);
+    if (!want.length) continue;
+
+    for (let i = 0; i + want.length <= words.length; i++) {
+      let hit = true;
+      for (let j = 0; j < want.length && hit; j++) {
+        hit = foldHe(bare(words[i + j])).toLowerCase() === want[j];
+      }
+      if (!hit) continue;
+      words.splice(i, want.length,
+                   lead(words[i]) + name + tail(words[i + want.length - 1]));
+      changed = true;
+    }
+  }
+
+  /* Only a line that was actually repaired is rebuilt, so nothing else about
+     the spacing of a title is quietly rewritten. */
+  return changed ? words.join(' ') : raw;
+}
+
 /* A venue whose own name opens with ב or ל — "בלפור" — loses that letter when
  * the model reads it as the word "at": "האימון בבלפור" comes back with the
  * place named "לפור". The configured list settles it, since a name that is one
@@ -2116,6 +2182,8 @@ function testSetup() {
     ? Object.keys(colors).map(function (n) { return n + '=' + colors[n]; }).join(', ')
     : '(none)'));
   Logger.log('VENUES: ' + (venues().length ? venues().join(' / ') : '(none)'));
+  Logger.log('WHOLE_NAMES: ' +
+             (wholeNames().length ? wholeNames().join(' / ') : '(none)'));
   Logger.log('TEMPLATES: ' + (templates() ? 'set' : '(none)'));
 
   /* Names configured for a colour but never offered as a button get no chip to

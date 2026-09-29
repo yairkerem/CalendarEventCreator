@@ -31,7 +31,7 @@ Roughly fifteen minutes, most of it waiting for Google's permission screens.
 | `SHARED_SECRET` | any random string — it is the only thing standing between your calendar and the open internet, so make it long |
 | `CALENDAR_ID` | the calendar to write into (Calendar → Settings → the calendar → *Integrate calendar* → Calendar ID). Your own is your email address |
 
-Four more are optional. Without them the app still works; it just reads *your*
+Five more are optional. Without them the app still works; it just reads *your*
 family's shorthand no better than a stranger would. All are JSON except
 `TEMPLATES`:
 
@@ -40,6 +40,7 @@ family's shorthand no better than a stranger would. All are JSON except
 | `PEOPLE` | `["דנה","איתי","נועה"]` — offered as buttons on the confirm screen |
 | `PERSON_COLOR` | `{"דנה":"YELLOW","איתי":"PALE_RED"}` — one colour each, so the shared board is readable at a glance. **Easier set from the app**: settings → צבע לכל שם, which writes this property for you |
 | `VENUES` | `["מגרש הדשא","אולם הספורט"]` — the real names of places, so a photographed schedule is matched to them rather than transcribed letter by letter |
+| `WHOLE_NAMES` | `["בלפור"]` — names whose first letter is part of the name. Hebrew opens words with letters that are also words, so "אימון בבלפור" comes back naming "לפור"; listing the name keeps it whole wherever it lands. Use this rather than `VENUES` when the name is not always a place — the same word can be a coach — since this list only protects the spelling, and the message still decides whether it is the title or the location |
 | `TEMPLATES` | free text; `{VENUES}` is replaced by the list above |
 
 Colour names come from `CalendarApp.EventColor`: `PALE_BLUE` (Lavender),

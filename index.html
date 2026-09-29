@@ -949,7 +949,7 @@ const LEGACY_BACKEND = 'https://script.google.com/macros/s/AKfycbyFsVefoAwxqAs9a
 /* ---- constants ------------------------------------------------ */
 /* Keep in step with CACHE_VERSION in sw.js — shown in settings so a phone can
    say which build it is actually running. */
-const APP_VERSION = 79;
+const APP_VERSION = 80;
 
 const LS_DIAG    = 'fc.diag';
 const LS_DIAGLOG = 'fc.diag.log';
@@ -1060,11 +1060,46 @@ const state = {
 };
 
 /* ---- screens -------------------------------------------------- */
+/* Android's back button leaves the page, which for an installed app means
+   leaving the app — from the settings screen as readily as from the message it
+   was opened to write. So the app keeps one history entry of its own while it
+   is anywhere but the main screen: back then returns here and spends that
+   entry, and the next back leaves, which is what a person expects both times.
+
+   One entry, not one per screen: moving from the confirmation to the day list
+   and back should not have to be walked back step by step, and a queue of
+   events confirmed one after another must not bury the way out. */
+let ownEntry = '';        // the screen an entry was pushed for, '' when none
+let goingBack = false;    // inside popstate, where pushing or popping again loops
+
 function show(name){
+  const leaving = (document.querySelector('.screen.active') || {}).id || '';
   for (const s of document.querySelectorAll('.screen')) s.classList.remove('active');
   $('s-' + name).classList.add('active');
   window.scrollTo(0, 0);
+
+  if (goingBack) return;
+  /* Only ever from the main screen: the setup shown at first launch, before
+     there is anything to come back to, leaves back alone. */
+  if (name !== 'input' && leaving === 's-input' && !ownEntry){
+    ownEntry = name;
+    try { history.pushState({ screen: name }, ''); } catch {}
+    return;
+  }
+  /* Back to the main screen by a button in the app: the entry is spent here,
+     so the next back still leaves rather than undoing this screen change. */
+  if (name === 'input' && ownEntry){
+    ownEntry = '';
+    try { history.back(); } catch {}
+  }
 }
+
+window.addEventListener('popstate', () => {
+  if (!ownEntry) return;            // nothing of ours left: the app is closing
+  ownEntry = '';
+  goingBack = true;
+  try { show('input'); } finally { goingBack = false; }
+});
 
 function say(el, text, kind){
   const node = $(el);
